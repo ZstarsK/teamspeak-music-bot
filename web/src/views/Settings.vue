@@ -46,37 +46,147 @@
       </div>
     </section>
 
-    <!-- Music Account -->
+    <!-- Music Account - QR Code Login -->
     <section class="settings-section">
       <h2 class="section-title">音乐账号</h2>
-      <div class="setting-row">
-        <div class="setting-label">
-          <Icon icon="mdi:music-note" class="setting-icon" />
-          网易云登录Cookie
+
+      <!-- NetEase -->
+      <div class="account-card">
+        <div class="account-header">
+          <Icon icon="mdi:cloud-outline" class="account-icon" />
+          <div class="account-info">
+            <div class="account-name">网易云音乐</div>
+            <div class="account-status" :class="{ logged: neteaseAuth.loggedIn }">
+              {{ neteaseAuth.loggedIn ? `已登录: ${neteaseAuth.nickname}` : '未登录' }}
+            </div>
+          </div>
         </div>
-        <div class="cookie-input-wrap">
+
+        <div class="login-methods">
+          <button
+            class="login-btn"
+            :class="{ active: neteaseLoginMode === 'qr' }"
+            @click="startQrLogin('netease')"
+            :disabled="neteaseQr.loading"
+          >
+            <Icon icon="mdi:qrcode" />
+            扫码登录
+          </button>
+          <button
+            class="login-btn"
+            :class="{ active: neteaseLoginMode === 'cookie' }"
+            @click="neteaseLoginMode = 'cookie'"
+          >
+            <Icon icon="mdi:cookie" />
+            Cookie登录
+          </button>
+        </div>
+
+        <!-- QR Code -->
+        <div v-if="neteaseLoginMode === 'qr'" class="qr-section">
+          <div v-if="neteaseQr.loading" class="qr-loading">
+            <Icon icon="mdi:loading" class="spin" />
+            生成二维码中...
+          </div>
+          <div v-else-if="neteaseQr.dataUrl" class="qr-wrap">
+            <img :src="neteaseQr.dataUrl" class="qr-image" alt="QR Code" />
+            <div class="qr-status" :class="neteaseQr.status">
+              <template v-if="neteaseQr.status === 'waiting'">
+                <Icon icon="mdi:cellphone" /> 请使用网易云音乐APP扫码
+              </template>
+              <template v-else-if="neteaseQr.status === 'scanned'">
+                <Icon icon="mdi:check" /> 已扫码，请在手机上确认
+              </template>
+              <template v-else-if="neteaseQr.status === 'confirmed'">
+                <Icon icon="mdi:check-circle" /> 登录成功!
+              </template>
+              <template v-else-if="neteaseQr.status === 'expired'">
+                <Icon icon="mdi:refresh" /> 二维码已过期
+                <button class="btn-link" @click="startQrLogin('netease')">重新生成</button>
+              </template>
+            </div>
+          </div>
+        </div>
+
+        <!-- Cookie -->
+        <div v-if="neteaseLoginMode === 'cookie'" class="cookie-section">
           <textarea
             v-model="neteaseCookie"
             class="textarea"
             placeholder="粘贴网易云音乐Cookie..."
             rows="3"
           />
-          <button class="btn-primary" @click="saveCookie('netease')">保存</button>
+          <button class="btn-primary btn-save" @click="saveCookie('netease')">保存Cookie</button>
         </div>
       </div>
-      <div class="setting-row">
-        <div class="setting-label">
-          <Icon icon="mdi:music-note" class="setting-icon" />
-          QQ音乐登录Cookie
+
+      <!-- QQ Music -->
+      <div class="account-card">
+        <div class="account-header">
+          <Icon icon="mdi:music-circle-outline" class="account-icon" />
+          <div class="account-info">
+            <div class="account-name">QQ音乐</div>
+            <div class="account-status" :class="{ logged: qqAuth.loggedIn }">
+              {{ qqAuth.loggedIn ? `已登录: ${qqAuth.nickname}` : '未登录' }}
+            </div>
+          </div>
         </div>
-        <div class="cookie-input-wrap">
+
+        <div class="login-methods">
+          <button
+            class="login-btn"
+            :class="{ active: qqLoginMode === 'qr' }"
+            @click="startQrLogin('qq')"
+            :disabled="qqQr.loading"
+          >
+            <Icon icon="mdi:qrcode" />
+            扫码登录
+          </button>
+          <button
+            class="login-btn"
+            :class="{ active: qqLoginMode === 'cookie' }"
+            @click="qqLoginMode = 'cookie'"
+          >
+            <Icon icon="mdi:cookie" />
+            Cookie登录
+          </button>
+        </div>
+
+        <!-- QR Code -->
+        <div v-if="qqLoginMode === 'qr'" class="qr-section">
+          <div v-if="qqQr.loading" class="qr-loading">
+            <Icon icon="mdi:loading" class="spin" />
+            生成二维码中...
+          </div>
+          <div v-else-if="qqQr.dataUrl" class="qr-wrap">
+            <img :src="qqQr.dataUrl" class="qr-image" alt="QR Code" />
+            <div class="qr-status" :class="qqQr.status">
+              <template v-if="qqQr.status === 'waiting'">
+                <Icon icon="mdi:cellphone" /> 请使用QQ音乐APP扫码
+              </template>
+              <template v-else-if="qqQr.status === 'scanned'">
+                <Icon icon="mdi:check" /> 已扫码，请在手机上确认
+              </template>
+              <template v-else-if="qqQr.status === 'confirmed'">
+                <Icon icon="mdi:check-circle" /> 登录成功!
+              </template>
+              <template v-else-if="qqQr.status === 'expired'">
+                <Icon icon="mdi:refresh" /> 二维码已过期
+                <button class="btn-link" @click="startQrLogin('qq')">重新生成</button>
+              </template>
+            </div>
+          </div>
+        </div>
+
+        <!-- Cookie -->
+        <div v-if="qqLoginMode === 'cookie'" class="cookie-section">
           <textarea
             v-model="qqCookie"
             class="textarea"
             placeholder="粘贴QQ音乐Cookie..."
             rows="3"
           />
-          <button class="btn-primary" @click="saveCookie('qq')">保存</button>
+          <button class="btn-primary btn-save" @click="saveCookie('qq')">保存Cookie</button>
         </div>
       </div>
     </section>
@@ -99,9 +209,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue';
+import { ref, reactive, onMounted, onUnmounted } from 'vue';
 import { Icon } from '@iconify/vue';
 import axios from 'axios';
+import QRCode from 'qrcode';
 import { usePlayerStore } from '../stores/player.js';
 
 const store = usePlayerStore();
@@ -112,12 +223,116 @@ const neteaseCookie = ref('');
 const qqCookie = ref('');
 const commandPrefix = ref('!');
 
+// Login mode: 'qr' | 'cookie' | null
+const neteaseLoginMode = ref<'qr' | 'cookie' | null>(null);
+const qqLoginMode = ref<'qr' | 'cookie' | null>(null);
+
+// Auth status
+const neteaseAuth = reactive({ loggedIn: false, nickname: '', avatarUrl: '' });
+const qqAuth = reactive({ loggedIn: false, nickname: '', avatarUrl: '' });
+
+// QR state
+interface QrState {
+  loading: boolean;
+  dataUrl: string;
+  key: string;
+  status: 'waiting' | 'scanned' | 'confirmed' | 'expired';
+  pollTimer: ReturnType<typeof setInterval> | null;
+}
+
+const neteaseQr = reactive<QrState>({
+  loading: false, dataUrl: '', key: '', status: 'waiting', pollTimer: null,
+});
+const qqQr = reactive<QrState>({
+  loading: false, dataUrl: '', key: '', status: 'waiting', pollTimer: null,
+});
+
+function getQrState(platform: string): QrState {
+  return platform === 'netease' ? neteaseQr : qqQr;
+}
+
+async function checkAuthStatus() {
+  try {
+    const [nRes, qRes] = await Promise.all([
+      axios.get('/api/auth/status', { params: { platform: 'netease' } }),
+      axios.get('/api/auth/status', { params: { platform: 'qq' } }),
+    ]);
+    Object.assign(neteaseAuth, nRes.data);
+    Object.assign(qqAuth, qRes.data);
+  } catch {
+    // API not ready
+  }
+}
+
+async function startQrLogin(platform: string) {
+  const qr = getQrState(platform);
+  if (platform === 'netease') neteaseLoginMode.value = 'qr';
+  else qqLoginMode.value = 'qr';
+
+  // Stop existing poll
+  if (qr.pollTimer) clearInterval(qr.pollTimer);
+  qr.loading = true;
+  qr.dataUrl = '';
+  qr.status = 'waiting';
+
+  try {
+    const res = await axios.post('/api/auth/qrcode', { platform });
+    const { qrUrl, key } = res.data;
+    qr.key = key;
+
+    // Generate QR code image
+    qr.dataUrl = await QRCode.toDataURL(qrUrl, {
+      width: 200,
+      margin: 2,
+      color: {
+        dark: store.theme === 'dark' ? '#ffffff' : '#000000',
+        light: store.theme === 'dark' ? '#2a2a2a' : '#ffffff',
+      },
+    });
+
+    qr.loading = false;
+
+    // Start polling
+    qr.pollTimer = setInterval(() => pollQrStatus(platform), 2000);
+  } catch (err) {
+    qr.loading = false;
+    console.error('QR generation failed:', err);
+  }
+}
+
+async function pollQrStatus(platform: string) {
+  const qr = getQrState(platform);
+  if (!qr.key) return;
+
+  try {
+    const res = await axios.get('/api/auth/qrcode/status', {
+      params: { key: qr.key, platform },
+    });
+    qr.status = res.data.status;
+
+    if (qr.status === 'confirmed') {
+      if (qr.pollTimer) clearInterval(qr.pollTimer);
+      qr.pollTimer = null;
+      // Refresh auth status
+      await checkAuthStatus();
+    } else if (qr.status === 'expired') {
+      if (qr.pollTimer) clearInterval(qr.pollTimer);
+      qr.pollTimer = null;
+    }
+  } catch {
+    // Ignore poll errors
+  }
+}
+
 async function createBot() {
   if (!newBotName.value || !newBotServer.value) return;
   try {
     await axios.post('/api/bot', {
       name: newBotName.value,
-      server: newBotServer.value,
+      serverAddress: newBotServer.value,
+      serverPort: 9987,
+      nickname: newBotName.value,
+      autoStart: false,
     });
     newBotName.value = '';
     newBotServer.value = '';
@@ -142,20 +357,27 @@ async function toggleBot(botId: string, connected: boolean) {
 
 async function saveCookie(platform: string) {
   const cookie = platform === 'netease' ? neteaseCookie.value : qqCookie.value;
+  if (!cookie) return;
   try {
-    await axios.post('/api/settings/cookie', { platform, cookie });
+    await axios.post('/api/auth/cookie', { platform, cookie });
+    await checkAuthStatus();
   } catch {
     // Ignore
   }
 }
 
 async function savePrefix() {
-  try {
-    await axios.post('/api/settings/prefix', { prefix: commandPrefix.value });
-  } catch {
-    // Ignore
-  }
+  // Prefix is saved client-side for now
 }
+
+onMounted(() => {
+  checkAuthStatus();
+});
+
+onUnmounted(() => {
+  if (neteaseQr.pollTimer) clearInterval(neteaseQr.pollTimer);
+  if (qqQr.pollTimer) clearInterval(qqQr.pollTimer);
+});
 </script>
 
 <style lang="scss" scoped>
@@ -213,10 +435,10 @@ async function savePrefix() {
   font-size: 13px;
   font-weight: 600;
   transition: all var(--transition-fast);
-
   &:hover { background: var(--color-primary); color: white; }
 }
 
+// Bot management
 .bot-list {
   display: flex;
   flex-direction: column;
@@ -249,13 +471,135 @@ async function savePrefix() {
   border-radius: var(--radius-sm);
   background: var(--border-color);
   color: var(--text-tertiary);
-
   &.online {
     background: rgba(51, 94, 234, 0.15);
     color: var(--color-primary);
   }
 }
 
+// Account cards
+.account-card {
+  margin-bottom: 20px;
+  padding: 20px;
+  background: var(--hover-bg);
+  border-radius: var(--radius-md);
+}
+
+.account-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.account-icon {
+  font-size: 28px;
+  color: var(--color-primary);
+}
+
+.account-name {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.account-status {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  &.logged { color: #4caf50; }
+}
+
+.login-methods {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.login-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  font-weight: 500;
+  transition: all var(--transition-fast);
+
+  &:hover { border-color: var(--color-primary); color: var(--color-primary); }
+  &.active {
+    background: rgba(51, 94, 234, 0.1);
+    border-color: var(--color-primary);
+    color: var(--color-primary);
+  }
+  &:disabled { opacity: 0.5; cursor: not-allowed; }
+}
+
+// QR code
+.qr-section {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 20px 0;
+}
+
+.qr-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-secondary);
+  font-size: 14px;
+}
+
+.qr-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+
+.qr-image {
+  width: 200px;
+  height: 200px;
+  border-radius: var(--radius-md);
+  border: 2px solid var(--border-color);
+}
+
+.qr-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  padding: 8px 16px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+
+  &.scanned { color: #ff9800; background: rgba(255, 152, 0, 0.1); }
+  &.confirmed { color: #4caf50; background: rgba(76, 175, 80, 0.1); }
+  &.expired { color: #f44336; background: rgba(244, 67, 54, 0.1); }
+}
+
+.btn-link {
+  color: var(--color-primary);
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: underline;
+  margin-left: 8px;
+}
+
+// Cookie section
+.cookie-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.btn-save {
+  align-self: flex-end;
+}
+
+// Shared
 .form-row {
   display: flex;
   gap: 8px;
@@ -271,18 +615,15 @@ async function savePrefix() {
   font-family: inherit;
   font-size: 13px;
   outline: none;
-
   &:focus { border-color: var(--color-primary); }
 }
 
-.input-sm {
-  max-width: 80px;
-}
+.input-sm { max-width: 80px; }
 
 .textarea {
   width: 100%;
   padding: 10px 14px;
-  background: var(--hover-bg);
+  background: var(--bg-card);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);
   color: var(--text-primary);
@@ -290,14 +631,7 @@ async function savePrefix() {
   font-size: 13px;
   outline: none;
   resize: vertical;
-
   &:focus { border-color: var(--color-primary); }
-}
-
-.cookie-input-wrap {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
 }
 
 .prefix-input-wrap {
@@ -315,7 +649,6 @@ async function savePrefix() {
   font-weight: 600;
   white-space: nowrap;
   transition: transform var(--transition-fast);
-
   &:hover { transform: scale(1.02); }
   &:active { transform: scale(0.98); }
 }
@@ -327,7 +660,15 @@ async function savePrefix() {
   font-size: 12px;
   font-weight: 600;
   transition: all var(--transition-fast);
-
   &:hover { background: var(--color-primary); color: white; }
+}
+
+.spin {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 </style>
