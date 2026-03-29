@@ -1,7 +1,18 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
+import { createRequire } from "node:module";
 import { createOpusEncoder, PCM_FRAME_BYTES, type Encoder } from "./encoder.js";
 import type { Logger } from "../logger.js";
+
+// ffmpeg-static is a CJS module that exports the path to the bundled ffmpeg binary.
+const require = createRequire(import.meta.url);
+const ffmpegPath: string | null = require("ffmpeg-static");
+
+/** Resolve ffmpeg binary: prefer bundled ffmpeg-static, fall back to system PATH. */
+function getFfmpegCommand(): string {
+  if (ffmpegPath) return ffmpegPath;
+  return "ffmpeg"; // fallback to system-installed ffmpeg
+}
 
 export interface PlayerEvents {
   frame: (opusFrame: Buffer) => void;
@@ -57,7 +68,9 @@ export class AudioPlayer extends EventEmitter {
       "-",
     );
 
-    this.ffmpeg = spawn("ffmpeg", args, { stdio: ["ignore", "pipe", "pipe"] });
+    const ffmpegBin = getFfmpegCommand();
+    this.logger.debug({ ffmpeg: ffmpegBin }, "Using ffmpeg binary");
+    this.ffmpeg = spawn(ffmpegBin, args, { stdio: ["ignore", "pipe", "pipe"] });
 
     this.ffmpeg.stderr!.on("data", () => {});
 
