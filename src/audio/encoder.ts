@@ -1,4 +1,5 @@
-import { OpusEncoder } from "@discordjs/opus";
+import opusModule from "@discordjs/opus";
+const { OpusEncoder } = opusModule;
 
 const SAMPLE_RATE = 48000;
 const CHANNELS = 2;
