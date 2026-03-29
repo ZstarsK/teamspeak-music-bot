@@ -29,6 +29,8 @@ export const usePlayerStore = defineStore('player', {
     activeBotId: null as string | null,
     queue: [] as Song[],
     theme: 'dark' as 'dark' | 'light',
+    playStartedAt: 0, // timestamp when current song started
+    pausedElapsed: 0, // elapsed time when paused
   }),
 
   getters: {
@@ -44,6 +46,13 @@ export const usePlayerStore = defineStore('player', {
     isPaused(): boolean {
       return this.activeBot?.paused ?? false;
     },
+    /** Elapsed playback time in seconds */
+    elapsed(): number {
+      if (!this.activeBot?.currentSong) return 0;
+      if (this.isPaused) return this.pausedElapsed;
+      if (!this.isPlaying || this.playStartedAt === 0) return 0;
+      return (Date.now() - this.playStartedAt) / 1000;
+    },
   },
 
   actions: {
@@ -52,11 +61,33 @@ export const usePlayerStore = defineStore('player', {
     },
 
     updateBotStatus(botId: string, status: BotStatus) {
+      const prev = this.bots.find((b) => b.id === botId);
+      const prevSongId = prev?.currentSong?.id;
+      const newSongId = status.currentSong?.id;
+
       const index = this.bots.findIndex((b) => b.id === botId);
       if (index >= 0) {
         this.bots[index] = status;
       } else {
         this.bots.push(status);
+      }
+
+      // Reset play timer when song changes
+      if (newSongId && newSongId !== prevSongId) {
+        this.playStartedAt = Date.now();
+        this.pausedElapsed = 0;
+      }
+
+      // Track pause/resume
+      if (status.playing && !status.paused && prev?.paused) {
+        // Resumed — adjust start time
+        this.playStartedAt = Date.now() - this.pausedElapsed * 1000;
+      }
+      if (status.paused && !prev?.paused) {
+        // Paused — save elapsed
+        this.pausedElapsed = this.playStartedAt > 0
+          ? (Date.now() - this.playStartedAt) / 1000
+          : 0;
       }
     },
 
@@ -84,11 +115,28 @@ export const usePlayerStore = defineStore('player', {
       if (!this.activeBotId && this.bots.length > 0) {
         this.activeBotId = this.bots[0].id;
       }
+      // If a song is playing, set the start time
+      const bot = this.activeBot;
+      if (bot?.playing && bot.currentSong && this.playStartedAt === 0) {
+        this.playStartedAt = Date.now();
+      }
+    },
+
+    async fetchQueue() {
+      if (!this.activeBotId) return;
+      try {
+        const res = await axios.get(`/api/player/${this.activeBotId}/queue`);
+        this.queue = res.data.queue ?? [];
+      } catch {
+        // ignore
+      }
     },
 
     async play(query: string, platform = 'netease') {
       if (!this.activeBotId) return;
       await axios.post(`/api/player/${this.activeBotId}/play`, { query, platform });
+      this.playStartedAt = Date.now();
+      this.pausedElapsed = 0;
     },
 
     async addToQueue(query: string, platform = 'netease') {
@@ -98,27 +146,37 @@ export const usePlayerStore = defineStore('player', {
 
     async pause() {
       if (!this.activeBotId) return;
+      this.pausedElapsed = this.playStartedAt > 0
+        ? (Date.now() - this.playStartedAt) / 1000
+        : 0;
       await axios.post(`/api/player/${this.activeBotId}/pause`);
     },
 
     async resume() {
       if (!this.activeBotId) return;
+      this.playStartedAt = Date.now() - this.pausedElapsed * 1000;
       await axios.post(`/api/player/${this.activeBotId}/resume`);
     },
 
     async next() {
       if (!this.activeBotId) return;
       await axios.post(`/api/player/${this.activeBotId}/next`);
+      this.playStartedAt = Date.now();
+      this.pausedElapsed = 0;
     },
 
     async prev() {
       if (!this.activeBotId) return;
       await axios.post(`/api/player/${this.activeBotId}/prev`);
+      this.playStartedAt = Date.now();
+      this.pausedElapsed = 0;
     },
 
     async stop() {
       if (!this.activeBotId) return;
       await axios.post(`/api/player/${this.activeBotId}/stop`);
+      this.playStartedAt = 0;
+      this.pausedElapsed = 0;
     },
 
     async setVolume(volume: number) {

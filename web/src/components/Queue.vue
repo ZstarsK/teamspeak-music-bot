@@ -33,12 +33,13 @@
 </template>
 
 <script setup lang="ts">
+import { watch } from 'vue';
 import { Icon } from '@iconify/vue';
 import axios from 'axios';
 import { usePlayerStore } from '../stores/player.js';
 import CoverArt from './CoverArt.vue';
 
-defineProps<{
+const props = defineProps<{
   open: boolean;
 }>();
 
@@ -48,10 +49,16 @@ defineEmits<{
 
 const store = usePlayerStore();
 
+// Fetch queue when panel opens
+watch(() => props.open, (isOpen) => {
+  if (isOpen) store.fetchQueue();
+});
+
 async function removeSong(index: number) {
   if (!store.activeBotId) return;
   try {
-    await axios.delete(`/api/player/${store.activeBotId}/queue/${index}`);
+    await axios.delete(`/api/player/${store.activeBotId}/queue/${index + 1}`);
+    await store.fetchQueue();
   } catch {
     // Ignore
   }
