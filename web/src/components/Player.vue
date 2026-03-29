@@ -74,7 +74,6 @@
 <script setup lang="ts">
 import { computed, ref, onMounted, onUnmounted } from 'vue';
 import { Icon } from '@iconify/vue';
-import axios from 'axios';
 import { usePlayerStore } from '../stores/player.js';
 import CoverArt from './CoverArt.vue';
 import Queue from './Queue.vue';
@@ -102,13 +101,8 @@ function formatTime(seconds: number): string {
 }
 
 function updateProgress() {
-  const bot = store.activeBot;
-  const seekOff = store.seekOffset;
-  if (bot?.playing && !bot.paused && store.playStartedAt > 0) {
-    currentElapsed.value = seekOff + (Date.now() - store.playStartedAt) / 1000;
-  } else if (bot?.paused) {
-    currentElapsed.value = store.pausedElapsed;
-  }
+  // Use store.elapsed which interpolates from server ground truth
+  currentElapsed.value = store.elapsed;
 
   const duration = currentSong.value?.duration ?? 0;
   progressPercent.value = duration > 0
@@ -120,20 +114,12 @@ function updateProgress() {
 
 async function onProgressClick(e: MouseEvent) {
   const bar = progressBarRef.value;
-  if (!bar || !store.activeBotId) return;
+  if (!bar) return;
   const rect = bar.getBoundingClientRect();
   const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
   const duration = currentSong.value?.duration ?? 0;
   const seekTime = ratio * duration;
-
-  try {
-    await axios.post(`/api/player/${store.activeBotId}/seek`, { position: seekTime });
-    store.seekOffset = seekTime;
-    store.playStartedAt = Date.now();
-    store.pausedElapsed = 0;
-  } catch {
-    // ignore
-  }
+  await store.seek(seekTime);
 }
 
 function onProgressHover(e: MouseEvent) {

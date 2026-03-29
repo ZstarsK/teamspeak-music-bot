@@ -9,7 +9,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted } from 'vue';
+import { computed, onMounted, onUnmounted } from 'vue';
 import { usePlayerStore } from './stores/player.js';
 import { useWebSocket } from './composables/useWebSocket.js';
 import Navbar from './components/Navbar.vue';
@@ -19,10 +19,18 @@ const playerStore = usePlayerStore();
 const theme = computed(() => playerStore.theme);
 const { connect } = useWebSocket();
 
+let syncTimer: ReturnType<typeof setInterval> | null = null;
+
 onMounted(() => {
   playerStore.loadTheme();
   connect();
   playerStore.fetchBots();
+  // Periodically sync elapsed time from server (ground truth)
+  syncTimer = setInterval(() => playerStore.syncElapsed(), 3000);
+});
+
+onUnmounted(() => {
+  if (syncTimer) clearInterval(syncTimer);
 });
 </script>
 

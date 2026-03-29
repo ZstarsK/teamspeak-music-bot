@@ -104,6 +104,12 @@ export function createPlayerRouter(
     }
   });
 
+  // Get current elapsed time (ground truth from server)
+  router.get("/:botId/elapsed", (req, res) => {
+    const bot = (req as any).bot;
+    res.json({ elapsed: bot.getPlayer().getElapsed() });
+  });
+
   // Seek to position
   router.post("/:botId/seek", async (req, res) => {
     try {
@@ -153,6 +159,7 @@ export function createPlayerRouter(
   });
 
   // Play a playlist by ID — stores metadata only, resolves URL for first song
+  // Respects current play mode (random = pick random first song)
   router.post("/:botId/play-playlist", async (req, res) => {
     try {
       const bot = (req as any).bot;
@@ -163,21 +170,31 @@ export function createPlayerRouter(
         return;
       }
 
+      // Stop current playback
+      bot.getPlayer().stop();
+
       const songs = await provider.getPlaylistSongs(playlistId);
       if (songs.length === 0) {
         res.json({ message: "Playlist is empty" });
         return;
       }
 
-      // Add all songs as metadata only (no URL fetching!)
       const queue = bot.getQueueManager();
       queue.clear();
       for (const song of songs) {
         queue.add({ ...song, platform: provider.platform });
       }
 
-      // Only resolve URL for the first song
-      const first = queue.play();
+      // Use queue.play() for sequential, or pick random index for random modes
+      const mode = queue.getMode();
+      let first;
+      if (mode === "random" || mode === "rloop") {
+        const idx = Math.floor(Math.random() * queue.size());
+        first = queue.playAt(idx);
+      } else {
+        first = queue.play();
+      }
+
       if (first) {
         await bot.resolveAndPlay(first);
       }

@@ -17,13 +17,14 @@ export class AudioPlayer extends EventEmitter {
   private ffmpeg: ChildProcess | null = null;
   private encoder: Encoder;
   private state: PlayerState = "idle";
-  private volume = 75; // 0-100
+  private volume = 75;
   private pcmBuffer: Buffer = Buffer.alloc(0);
   private logger: Logger;
   private frameLoopRunning = false;
   private nextFrameTime = 0;
   private currentUrl = "";
-  private seekOffset = 0; // seconds offset from seek
+  private seekOffset = 0;
+  private framesPlayed = 0; // ground truth: number of 20ms frames sent
 
   constructor(logger: Logger) {
     super();
@@ -35,6 +36,7 @@ export class AudioPlayer extends EventEmitter {
     this.stop();
     this.currentUrl = url;
     this.seekOffset = seekSeconds;
+    this.framesPlayed = 0;
 
     this.logger.info({ url: url.slice(0, 80), seek: seekSeconds }, "Starting playback");
 
@@ -57,19 +59,14 @@ export class AudioPlayer extends EventEmitter {
 
     this.ffmpeg = spawn("ffmpeg", args, { stdio: ["ignore", "pipe", "pipe"] });
 
-    this.ffmpeg.stderr!.on("data", () => {
-      // Suppress FFmpeg stderr output
-    });
+    this.ffmpeg.stderr!.on("data", () => {});
 
     this.ffmpeg.stdout!.on("data", (chunk: Buffer) => {
       this.pcmBuffer = Buffer.concat([this.pcmBuffer, chunk]);
     });
 
-    this.ffmpeg.on("close", (code) => {
-      this.logger.debug({ code }, "FFmpeg process closed");
-      if (this.state === "playing" || this.state === "paused") {
-        // Let the frame loop drain remaining frames, then it will emit trackEnd
-      }
+    this.ffmpeg.on("close", () => {
+      // Let frame loop drain remaining buffer
     });
 
     this.ffmpeg.on("error", (err) => {
@@ -81,10 +78,6 @@ export class AudioPlayer extends EventEmitter {
     this.startFrameLoop();
   }
 
-  /**
-   * High-precision frame sending loop using drift-correcting setTimeout.
-   * Much more accurate than setInterval which drifts ~4-16ms on Windows.
-   */
   private startFrameLoop(): void {
     if (this.frameLoopRunning) return;
     this.frameLoopRunning = true;
@@ -105,11 +98,9 @@ export class AudioPlayer extends EventEmitter {
       if (this.state === "playing") {
         this.sendNextFrame();
       } else if (this.state === "paused") {
-        // Keep the loop alive but adjust timing to avoid drift accumulation
         this.nextFrameTime = performance.now();
       }
 
-      // Check if we should stop (FFmpeg done + buffer empty)
       if (!this.ffmpeg && this.pcmBuffer.length < PCM_FRAME_BYTES) {
         this.frameLoopRunning = false;
         if (this.state !== "idle") {
@@ -129,10 +120,10 @@ export class AudioPlayer extends EventEmitter {
     const pcmFrame = this.pcmBuffer.subarray(0, PCM_FRAME_BYTES);
     this.pcmBuffer = this.pcmBuffer.subarray(PCM_FRAME_BYTES);
 
-    // Apply volume by scaling PCM samples directly
     const adjusted = this.applyVolume(pcmFrame);
     const opusFrame = this.encoder.encode(adjusted);
     this.emit("frame", opusFrame);
+    this.framesPlayed++;
   }
 
   private applyVolume(pcm: Buffer): Buffer {
@@ -142,12 +133,26 @@ export class AudioPlayer extends EventEmitter {
     for (let i = 0; i < pcm.length; i += 2) {
       let sample = pcm.readInt16LE(i);
       sample = Math.round(sample * factor);
-      // Clamp to 16-bit range
       if (sample > 32767) sample = 32767;
       else if (sample < -32768) sample = -32768;
       out.writeInt16LE(sample, i);
     }
     return out;
+  }
+
+  /** Actual elapsed time in seconds (ground truth from frame count) */
+  getElapsed(): number {
+    return this.seekOffset + (this.framesPlayed * FRAME_DURATION_MS) / 1000;
+  }
+
+  seek(seconds: number): void {
+    if (!this.currentUrl) return;
+    this.logger.info({ seek: seconds }, "Seeking");
+    this.play(this.currentUrl, seconds);
+  }
+
+  getSeekOffset(): number {
+    return this.seekOffset;
   }
 
   pause(): void {
@@ -160,21 +165,9 @@ export class AudioPlayer extends EventEmitter {
   resume(): void {
     if (this.state === "paused") {
       this.state = "playing";
-      // Reset timing to avoid burst of frames after unpause
       this.nextFrameTime = performance.now();
       this.logger.debug("Playback resumed");
     }
-  }
-
-  /** Seek to a position in seconds. Restarts FFmpeg with -ss offset. */
-  seek(seconds: number): void {
-    if (!this.currentUrl) return;
-    this.logger.info({ seek: seconds }, "Seeking");
-    this.play(this.currentUrl, seconds);
-  }
-
-  getSeekOffset(): number {
-    return this.seekOffset;
   }
 
   stop(): void {
@@ -187,6 +180,7 @@ export class AudioPlayer extends EventEmitter {
     this.state = "idle";
     this.currentUrl = "";
     this.seekOffset = 0;
+    this.framesPlayed = 0;
   }
 
   setVolume(vol: number): void {
