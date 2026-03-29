@@ -136,7 +136,7 @@ export function createPlayerRouter(
     }
   });
 
-  // Play a playlist by ID — fetches all songs, gets URLs, loads into queue
+  // Play a playlist by ID — stores metadata only, resolves URL for first song
   router.post("/:botId/play-playlist", async (req, res) => {
     try {
       const bot = (req as any).bot;
@@ -153,59 +153,49 @@ export function createPlayerRouter(
         return;
       }
 
-      // Get URL for first song and play it
+      // Add all songs as metadata only (no URL fetching!)
       const queue = bot.getQueueManager();
-      const player = bot.getPlayer();
       queue.clear();
-
-      let firstUrl: string | null = null;
       for (const song of songs) {
-        const url = await provider.getSongUrl(song.id);
-        if (url) {
-          queue.add({ ...song, url, platform: provider.platform });
-          if (!firstUrl) firstUrl = url;
-        }
+        queue.add({ ...song, platform: provider.platform });
       }
 
-      if (firstUrl) {
-        queue.play();
-        player.play(firstUrl);
+      // Only resolve URL for the first song
+      const first = queue.play();
+      if (first) {
+        await bot.resolveAndPlay(first);
       }
 
-      res.json({ message: `Loaded ${queue.size()} songs. Now playing: ${queue.current()?.name ?? "unknown"}` });
+      res.json({ message: `Loaded ${songs.length} songs. Now playing: ${first?.name ?? "unknown"}` });
     } catch (err) {
       logger.error({ err }, "Play playlist failed");
       res.status(500).json({ error: (err as Error).message });
     }
   });
 
-  // Play a single song by ID — no search needed
+  // Play a single song by ID — resolves URL on demand
   router.post("/:botId/play-by-id", async (req, res) => {
     try {
       const bot = (req as any).bot;
       const { songId, platform } = req.body;
-      const provider = platform === "qq" ? qqProvider : neteaseProvider;
-      if (!provider) {
-        res.status(500).json({ error: "Provider not available" });
-        return;
-      }
+      const provider = (platform === "qq" ? qqProvider : neteaseProvider)!;
 
-      const [song, url] = await Promise.all([
-        provider.getSongDetail(songId),
-        provider.getSongUrl(songId),
-      ]);
-
-      if (!song || !url) {
-        res.json({ message: "Cannot get song URL" });
+      const song = await provider.getSongDetail(songId);
+      if (!song) {
+        res.json({ message: "Song not found" });
         return;
       }
 
       const queue = bot.getQueueManager();
-      const player = bot.getPlayer();
       queue.clear();
-      queue.add({ ...song, url, platform: provider.platform });
+      queue.add({ ...song, platform: provider.platform });
       queue.play();
-      player.play(url);
+
+      const ok = await bot.resolveAndPlay(queue.current()!);
+      if (!ok) {
+        res.json({ message: `Cannot play: ${song.name}` });
+        return;
+      }
 
       res.json({ message: `Now playing: ${song.name} - ${song.artist}` });
     } catch (err) {
@@ -213,34 +203,26 @@ export function createPlayerRouter(
     }
   });
 
-  // Add a song to queue by ID
+  // Add a song to queue by ID — metadata only
   router.post("/:botId/add-by-id", async (req, res) => {
     try {
       const bot = (req as any).bot;
       const { songId, platform } = req.body;
-      const provider = platform === "qq" ? qqProvider : neteaseProvider;
-      if (!provider) {
-        res.status(500).json({ error: "Provider not available" });
-        return;
-      }
+      const provider = (platform === "qq" ? qqProvider : neteaseProvider)!;
 
-      const [song, url] = await Promise.all([
-        provider.getSongDetail(songId),
-        provider.getSongUrl(songId),
-      ]);
-
-      if (!song || !url) {
-        res.json({ message: "Cannot get song URL" });
+      const song = await provider.getSongDetail(songId);
+      if (!song) {
+        res.json({ message: "Song not found" });
         return;
       }
 
       const queue = bot.getQueueManager();
-      queue.add({ ...song, url, platform: provider.platform });
+      queue.add({ ...song, platform: provider.platform });
 
-      // If nothing is playing, start playing
+      // If nothing is playing, start the first song
       if (bot.getPlayer().getState() === "idle") {
-        queue.play();
-        bot.getPlayer().play(url);
+        const first = queue.play();
+        if (first) await bot.resolveAndPlay(first);
       }
 
       res.json({ message: `Added: ${song.name} - ${song.artist} (position ${queue.size()})` });

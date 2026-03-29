@@ -197,8 +197,40 @@ export class BotInstance extends EventEmitter {
     }
   }
 
+  getProviderFor(platform: "netease" | "qq"): MusicProvider {
+    return platform === "qq" ? this.qqProvider : this.neteaseProvider;
+  }
+
   private getProvider(useQQ: boolean): MusicProvider {
     return useQQ ? this.qqProvider : this.neteaseProvider;
+  }
+
+  /** Resolve URL for a song and start playing it. Skips to next if URL fails. */
+  async resolveAndPlay(song: QueuedSong): Promise<boolean> {
+    const provider = this.getProviderFor(song.platform);
+    try {
+      const url = await provider.getSongUrl(song.id);
+      if (!url) {
+        this.logger.warn({ songId: song.id, name: song.name }, "No URL available, skipping");
+        return false;
+      }
+      song.url = url;
+      this.player.play(url);
+      this.database.addPlayHistory({
+        botId: this.id,
+        songId: song.id,
+        songName: song.name,
+        artist: song.artist,
+        album: song.album,
+        platform: song.platform,
+        coverUrl: song.coverUrl,
+      });
+      this.emit("stateChange");
+      return true;
+    } catch (err) {
+      this.logger.error({ err, songId: song.id }, "Failed to resolve URL");
+      return false;
+    }
   }
 
   private async cmdPlay(cmd: ParsedCommand): Promise<string> {
@@ -209,30 +241,12 @@ export class BotInstance extends EventEmitter {
       return `No results found for: ${cmd.args}`;
 
     const song = result.songs[0];
-    const url = await provider.getSongUrl(song.id);
-    if (!url) return `Cannot get play URL for: ${song.name}`;
-
-    const queuedSong: QueuedSong = {
-      ...song,
-      url,
-      platform: provider.platform,
-    };
     this.queue.clear();
-    this.queue.add(queuedSong);
+    this.queue.add({ ...song, platform: provider.platform });
     this.queue.play();
-    this.player.play(url);
 
-    this.database.addPlayHistory({
-      botId: this.id,
-      songId: song.id,
-      songName: song.name,
-      artist: song.artist,
-      album: song.album,
-      platform: provider.platform,
-      coverUrl: song.coverUrl,
-    });
-
-    this.emit("stateChange");
+    const ok = await this.resolveAndPlay(this.queue.current()!);
+    if (!ok) return `Cannot play: ${song.name}`;
     return `Now playing: ${song.name} - ${song.artist}`;
   }
 
@@ -244,10 +258,7 @@ export class BotInstance extends EventEmitter {
       return `No results found for: ${cmd.args}`;
 
     const song = result.songs[0];
-    const url = await provider.getSongUrl(song.id);
-    if (!url) return `Cannot get play URL for: ${song.name}`;
-
-    this.queue.add({ ...song, url, platform: provider.platform });
+    this.queue.add({ ...song, platform: provider.platform });
     this.emit("stateChange");
     return `Added to queue: ${song.name} - ${song.artist} (position ${this.queue.size()})`;
   }
@@ -271,19 +282,19 @@ export class BotInstance extends EventEmitter {
     return "Stopped and queue cleared";
   }
 
-  private cmdNext(): string {
-    this.playNext();
+  private async cmdNext(): Promise<string> {
+    await this.playNext();
     const current = this.queue.current();
     if (current)
       return `Now playing: ${current.name} - ${current.artist}`;
     return "Queue is empty";
   }
 
-  private cmdPrev(): string {
+  private async cmdPrev(): Promise<string> {
     const prev = this.queue.prev();
     if (prev) {
-      this.player.play(prev.url);
-      this.emit("stateChange");
+      const ok = await this.resolveAndPlay(prev);
+      if (!ok) return "Cannot play previous song";
       return `Now playing: ${prev.name} - ${prev.artist}`;
     }
     return "No previous song";
@@ -353,15 +364,12 @@ export class BotInstance extends EventEmitter {
 
     this.queue.clear();
     for (const song of songs) {
-      const url = await provider.getSongUrl(song.id);
-      if (url) {
-        this.queue.add({ ...song, url, platform: provider.platform });
-      }
+      this.queue.add({ ...song, platform: provider.platform });
     }
     const first = this.queue.play();
-    if (first) this.player.play(first.url);
+    if (first) await this.resolveAndPlay(first);
     this.emit("stateChange");
-    return `Loaded playlist: ${songs.length} songs. Now playing: ${first?.name ?? "unknown"}`;
+    return `Loaded ${songs.length} songs. Now playing: ${first?.name ?? "unknown"}`;
   }
 
   private async cmdAlbum(cmd: ParsedCommand): Promise<string> {
@@ -372,15 +380,12 @@ export class BotInstance extends EventEmitter {
 
     this.queue.clear();
     for (const song of songs) {
-      const url = await provider.getSongUrl(song.id);
-      if (url) {
-        this.queue.add({ ...song, url, platform: provider.platform });
-      }
+      this.queue.add({ ...song, platform: provider.platform });
     }
     const first = this.queue.play();
-    if (first) this.player.play(first.url);
+    if (first) await this.resolveAndPlay(first);
     this.emit("stateChange");
-    return `Loaded album: ${songs.length} songs. Now playing: ${first?.name ?? "unknown"}`;
+    return `Loaded ${songs.length} songs. Now playing: ${first?.name ?? "unknown"}`;
   }
 
   private async cmdFm(): Promise<string> {
@@ -393,13 +398,10 @@ export class BotInstance extends EventEmitter {
 
     this.queue.clear();
     for (const song of songs) {
-      const url = await this.neteaseProvider.getSongUrl(song.id);
-      if (url) {
-        this.queue.add({ ...song, url, platform: "netease" });
-      }
+      this.queue.add({ ...song, platform: "netease" });
     }
     const first = this.queue.play();
-    if (first) this.player.play(first.url);
+    if (first) await this.resolveAndPlay(first);
     this.emit("stateChange");
     return `Personal FM started: ${first?.name ?? "unknown"} - ${first?.artist ?? ""}`;
   }
@@ -464,20 +466,20 @@ export class BotInstance extends EventEmitter {
     ].join("\n");
   }
 
-  private playNext(): void {
+  private async playNext(): Promise<void> {
     this.voteSkipUsers.clear();
     const next = this.queue.next();
     if (next) {
-      this.player.play(next.url);
-      this.database.addPlayHistory({
-        botId: this.id,
-        songId: next.id,
-        songName: next.name,
-        artist: next.artist,
-        album: next.album,
-        platform: next.platform,
-        coverUrl: next.coverUrl,
-      });
+      const ok = await this.resolveAndPlay(next);
+      if (!ok) {
+        // Skip to next if URL resolve fails (up to 3 retries)
+        for (let i = 0; i < 3; i++) {
+          const retry = this.queue.next();
+          if (!retry) break;
+          if (await this.resolveAndPlay(retry)) return;
+        }
+        this.player.stop();
+      }
     } else {
       this.player.stop();
     }

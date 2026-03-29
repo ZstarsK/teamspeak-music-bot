@@ -11,7 +11,7 @@ export interface QueuedSong {
   artist: string;
   album: string;
   platform: "netease" | "qq";
-  url: string;
+  url?: string; // resolved lazily at play time
   coverUrl: string;
   duration: number; // seconds
 }
