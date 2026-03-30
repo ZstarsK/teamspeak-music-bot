@@ -163,19 +163,18 @@ export class BotManager {
 
       this.bots.set(saved.id, bot);
 
-      // Auto-connect all saved bots on startup
-      try {
-        await bot.connect();
+      // Auto-connect in background (non-blocking, won't affect other bots)
+      bot.connect().then(() => {
         this.logger.info(
           { botId: saved.id, name: saved.name },
           "Auto-connected saved bot"
         );
-      } catch (err) {
+      }).catch((err) => {
         this.logger.error(
           { err, botId: saved.id, name: saved.name },
-          "Failed to auto-connect bot (will retry on manual start)"
+          "Failed to auto-connect bot (start manually from Settings)"
         );
-      }
+      });
     }
 
     this.logger.info(
