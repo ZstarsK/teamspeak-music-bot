@@ -1,261 +1,299 @@
-# TSMusicBot
+<p align="center">
+  <img src="https://img.shields.io/badge/TeamSpeak_3-Music_Bot-blue?style=for-the-badge&logo=teamspeak" alt="TSMusicBot" />
+</p>
 
-TeamSpeak 3 音乐机器人，支持网易云音乐和 QQ 音乐，带有 YesPlayMusic 风格的 WebUI 控制面板。
+<h1 align="center">TSMusicBot</h1>
 
-## 功能特性
+<p align="center">
+  <strong>TeamSpeak 3 音乐机器人</strong> — 网易云音乐 + QQ 音乐双平台，YesPlayMusic 风格 WebUI
+</p>
 
-- **双音源支持** — 网易云音乐 + QQ 音乐，统一搜索，结果标注来源
-- **真实 TS3 客户端协议** — 机器人在 TeamSpeak 中可见（非 ServerQuery 隐身模式）
-- **WebUI 控制面板** — YesPlayMusic 风格界面，支持深色/浅色主题
-- **播放控制** — 播放/暂停/上一首/下一首/进度跳转/音量调节
-- **播放模式** — 顺序播放/循环播放/随机播放/随机循环
-- **歌词同步** — 实时歌词滚动显示，支持翻译歌词，服务端帧计数精确同步
-- **歌单管理** — 推荐歌单/我的歌单/每日推荐/私人FM，点击播放全部
-- **播放队列** — 侧边栏队列面板，查看和管理当前队列
-- **音质选择** — 标准(128k) / 较高(192k) / 极高(320k) / 无损(FLAC) / Hi-Res / 超清母带
-- **QR码登录** — 扫码登录网易云/QQ音乐账号，Cookie 自动持久化
-- **多实例** — 同时管理多个机器人实例，连接不同 TS 服务器
-- **播放历史** — 自动记录所有播放过的歌曲
-- **懒加载** — 歌单只存储元数据，播放时才获取链接（避免链接过期）
-- **首页缓存** — 推荐数据 5 分钟缓存，返回首页无需重新加载
-- **一键部署** — FFmpeg 内置，Windows 双击运行 / Linux systemd / Docker
+<p align="center">
+  <img src="https://img.shields.io/badge/Node.js-20+-339933?logo=nodedotjs&logoColor=white" />
+  <img src="https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white" />
+  <img src="https://img.shields.io/badge/Vue-3-4FC08D?logo=vuedotjs&logoColor=white" />
+  <img src="https://img.shields.io/badge/License-MIT-green" />
+  <img src="https://img.shields.io/badge/FFmpeg-Bundled-orange?logo=ffmpeg" />
+  <img src="https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker&logoColor=white" />
+</p>
 
-## 快速开始
+---
 
-### Windows 一键部署
+## Features
 
-只需要安装 [Node.js 20+](https://nodejs.org/)，其他依赖（FFmpeg 等）全部自动安装。
+- **Dual Music Source** — NetEase Cloud Music + QQ Music, unified search with source badges
+- **Real TS3 Client Protocol** — Bot appears as a visible client (not invisible ServerQuery)
+- **YesPlayMusic WebUI** — Beautiful dark/light theme, responsive design
+- **Full Playback Control** — Play, pause, next, prev, seek, volume
+- **4 Play Modes** — Sequential, loop, shuffle, shuffle-loop
+- **Synced Lyrics** — Real-time scrolling lyrics with translation, server-side frame-accurate sync
+- **Playlist Management** — Recommended, daily, personal FM, user playlists
+- **Audio Quality** — Standard (128k) to Master Quality (4000k FLAC)
+- **QR Code Login** — Scan to login NetEase / QQ Music accounts
+- **Multi-Instance** — Manage multiple bots connected to different TS servers
+- **Lazy URL Loading** — Playlist loads instantly, URL fetched on-demand (never expires)
+- **One-Click Deploy** — FFmpeg bundled, Windows batch / Linux systemd / Docker
 
-```
-1. 下载或 clone 本项目
-2. 双击 scripts\setup.bat      （首次安装，自动安装 Node.js 和所有依赖）
-3. 双击 scripts\start.bat      （启动机器人）
-4. 浏览器打开 http://localhost:3000
-```
+## Screenshots
 
-> `setup.bat` 会自动通过 winget 安装 Node.js（如果未安装），然后运行 `npm install` 安装所有依赖（包括内置的 FFmpeg），最后构建项目。之后只需双击 `start.bat` 即可启动。
+> *WebUI screenshots coming soon*
 
-### 手动安装
+## Quick Start
 
-#### 环境要求
+### Option 1: Windows (Easiest)
 
-- Node.js >= 20（[下载](https://nodejs.org/)）
-- TeamSpeak 3 服务器
-- FFmpeg — **已内置**，无需单独安装（通过 `ffmpeg-static` 自动包含）
-
-#### 安装步骤
-
-```bash
-git clone <repo-url> tsmusicbot
+```powershell
+# 1. Clone
+git clone https://github.com/YOUR_USERNAME/tsmusicbot.git
 cd tsmusicbot
-npm install          # 安装后端依赖（包含 FFmpeg）
-cd web && npm install && cd ..   # 安装前端依赖
-npm run build        # 构建
+
+# 2. Setup (first time only — installs Node.js + all dependencies)
+scripts\setup.bat
+
+# 3. Start
+scripts\start.bat
 ```
 
-#### 运行
+Open **http://localhost:3000** and follow the setup wizard.
+
+### Option 2: Manual Install (Any OS)
+
+**Prerequisites:** [Node.js 20+](https://nodejs.org/) and a TeamSpeak 3 server.
+FFmpeg is **bundled automatically** — no manual install needed.
 
 ```bash
-# 开发模式（代码修改自动重载）
-npm run dev
+# Clone
+git clone https://github.com/YOUR_USERNAME/tsmusicbot.git
+cd tsmusicbot
 
-# 生产模式
+# Install dependencies
+npm install
+cd web && npm install && cd ..
+
+# Build
 npm run build
+
+# Start
 npm start
 ```
 
-#### 访问
+### Option 3: Docker
 
-打开浏览器：
-- **WebUI 控制面板:** http://localhost:3000
-- **首次使用向导:** http://localhost:3000/setup
+All dependencies included. Zero configuration.
 
-### Linux 一键安装
+```bash
+git clone https://github.com/YOUR_USERNAME/tsmusicbot.git
+cd tsmusicbot/scripts/docker
+docker-compose up -d
+```
+
+Open **http://localhost:3000**
+
+<details>
+<summary>Docker details</summary>
+
+- First build takes a few minutes (compiling native modules)
+- Uses `host` network mode for LAN TS3 server connectivity
+- Data persisted in Docker named volume `tsmusicbot-data`
+- Built-in health check at `/api/health`
+
+```bash
+docker logs -f tsmusicbot          # View logs
+docker-compose down                # Stop
+docker-compose up -d --build       # Rebuild after code update
+```
+
+If TS3 server is remote, edit `docker-compose.yml`:
+```yaml
+# Replace network_mode: host with:
+ports:
+  - "3000:3000"
+```
+
+</details>
+
+### Option 4: Linux (systemd)
 
 ```bash
 chmod +x scripts/install.sh
 sudo ./scripts/install.sh
 ```
 
-自动安装 Node.js、依赖，配置 systemd 服务，开机自启。
+Auto-installs Node.js, dependencies, configures systemd service with auto-start.
 
-### Docker 一键部署
+## Usage
 
-所有依赖已内置（Node.js、FFmpeg、Opus 编码器），无需安装任何额外软件。
+### First-Time Setup
 
-```bash
-cd scripts/docker
-docker-compose up -d
-```
+1. Open **http://localhost:3000/setup**
+2. Enter your TeamSpeak server address (default port: 9987)
+3. Set bot nickname
+4. (Optional) Scan QR code to login NetEase/QQ Music for VIP songs
 
-访问 http://localhost:3000
+### WebUI Pages
 
-**说明：**
-- 首次构建需要几分钟（编译 native 模块）
-- 使用 `host` 网络模式，机器人可直接连接局域网 TS3 服务器
-- 数据持久化在 Docker named volume `tsmusicbot-data` 中（数据库、Cookie、日志）
-- 内置健康检查（`/api/health`），支持 Docker 自动重启
+| Page | Description |
+|------|-------------|
+| **Home** | Recommended playlists, daily picks, personal FM, my playlists |
+| **Search** | Unified search across both platforms, results show source badge |
+| **Playlist** | View playlist detail, play all (respects current play mode) |
+| **Lyrics** | Full-screen synced lyrics with blurred album art background |
+| **History** | All previously played songs |
+| **Settings** | Theme, bot management, account login, audio quality, command prefix |
 
-```bash
-# 查看日志
-docker logs -f tsmusicbot
+### TeamSpeak Text Commands
 
-# 停止
-docker-compose down
+Control the bot by sending text messages in your TS channel:
 
-# 重新构建（代码更新后）
-docker-compose up -d --build
-```
+| Command | Description |
+|---------|-------------|
+| `!play <song>` | Search and play |
+| `!play -q <song>` | Search from QQ Music |
+| `!add <song>` | Add to queue |
+| `!pause` / `!resume` | Pause / Resume |
+| `!next` / `!prev` | Next / Previous track |
+| `!stop` | Stop and clear queue |
+| `!vol <0-100>` | Set volume |
+| `!queue` | Show queue |
+| `!mode <seq\|loop\|random\|rloop>` | Change play mode |
+| `!playlist <ID>` | Load playlist |
+| `!album <ID>` | Load album |
+| `!fm` | Personal FM (NetEase) |
+| `!lyrics` | Show lyrics |
+| `!now` | Current track info |
+| `!vote` | Vote to skip |
+| `!help` | Help |
 
-如果 TS3 服务器不在同一台机器，可编辑 `docker-compose.yml` 将 `network_mode: host` 替换为端口映射：
-```yaml
-ports:
-  - "3000:3000"
-```
+> Default prefix: `!` (configurable in Settings). Aliases: `!p` = `!play`, `!s` = `!skip`, `!n` = `!next`
 
-## 使用说明
+### Audio Quality
 
-### 首次配置
+| Level | Bitrate | Format | Note |
+|-------|---------|--------|------|
+| Standard | 128kbps | MP3 | Free |
+| Higher | 192kbps | MP3 | Free |
+| **Exhigh** | **320kbps** | **MP3** | **Default** |
+| Lossless | ~900kbps | FLAC | VIP required |
+| Hi-Res | ~1500kbps | FLAC | VIP required |
+| Master | ~4000kbps | FLAC | Premium VIP |
 
-1. 打开 http://localhost:3000/setup 进入设置向导
-2. 填写 TeamSpeak 服务器地址和端口（默认 9987）
-3. 设置机器人昵称
-4. （可选）扫码登录网易云/QQ音乐账号以播放 VIP 歌曲
+Change in Settings page. Takes effect immediately for subsequent songs.
 
-### WebUI 功能
-
-| 页面 | 功能 |
-|------|------|
-| **首页** | 推荐歌单、每日推荐、私人FM、我的歌单 |
-| **搜索** | 双平台统一搜索，结果标注 网易云/QQ 来源 |
-| **歌单** | 查看歌单详情，播放全部（根据播放模式选择首歌） |
-| **歌词** | 全屏歌词页，实时同步滚动，支持翻译歌词 |
-| **历史** | 播放历史记录 |
-| **设置** | 主题切换、机器人管理、音乐账号登录、音质选择、命令前缀 |
-
-### TS 文字命令
-
-在 TeamSpeak 频道中发送文字消息控制机器人：
-
-| 命令 | 说明 |
-|------|------|
-| `!play <歌名>` | 搜索并播放 |
-| `!play -q <歌名>` | 从 QQ 音乐搜索 |
-| `!add <歌名>` | 添加到队列 |
-| `!pause` / `!resume` | 暂停 / 恢复 |
-| `!next` / `!prev` | 下一首 / 上一首 |
-| `!stop` | 停止并清空队列 |
-| `!vol <0-100>` | 设置音量 |
-| `!queue` | 查看播放队列 |
-| `!mode <seq\|loop\|random\|rloop>` | 切换播放模式 |
-| `!playlist <ID>` | 加载歌单 |
-| `!album <ID>` | 加载专辑 |
-| `!fm` | 私人 FM（网易云） |
-| `!lyrics` | 显示当前歌词 |
-| `!now` | 当前播放信息 |
-| `!vote` | 投票跳过当前歌曲 |
-| `!move <频道>` | 移动到指定频道 |
-| `!help` | 帮助信息 |
-
-> 命令前缀默认为 `!`，可在设置页面修改。支持别名：`!p` = `!play`，`!s` = `!skip`，`!n` = `!next`
-
-### 音质等级
-
-| 等级 | 码率 | 格式 | 说明 |
-|------|------|------|------|
-| 标准 | 128kbps | MP3 | 默认免费 |
-| 较高 | 192kbps | MP3 | |
-| 极高 | 320kbps | MP3 | **默认选择** |
-| 无损 | ~900kbps | FLAC | 需要 VIP |
-| Hi-Res | ~1500kbps | FLAC | 需要 VIP |
-| 超清母带 | ~4000kbps | FLAC | 需要黑胶 VIP |
-
-在设置页面选择音质，立即生效（影响后续播放的歌曲）。
-
-## 项目架构
+## Architecture
 
 ```
 tsmusicbot/
-├── src/                    # 后端源码 (TypeScript)
-│   ├── audio/              # 音频引擎
-│   │   ├── encoder.ts      # Opus 编码器 (@discordjs/opus)
-│   │   ├── player.ts       # FFmpeg 播放器（内置 ffmpeg-static）
-│   │   └── queue.ts        # 播放队列（顺序/循环/随机/随机循环）
-│   ├── bot/                # 机器人核心
-│   │   ├── commands.ts     # TS 文字命令解析（前缀、别名、权限）
-│   │   ├── instance.ts     # Bot 实例（绑定 TS3 + 播放器 + 音源）
-│   │   └── manager.ts      # 多实例生命周期管理
-│   ├── data/               # 数据层
-│   │   ├── config.ts       # JSON 配置（端口、前缀、音质等）
-│   │   └── database.ts     # SQLite（播放历史、实例持久化）
-│   ├── music/              # 音源服务
-│   │   ├── provider.ts     # 统一 MusicProvider 接口
-│   │   ├── netease.ts      # 网易云音乐适配器
-│   │   ├── qq.ts           # QQ 音乐适配器
-│   │   ├── auth.ts         # Cookie 持久化存储
-│   │   └── api-server.ts   # 嵌入式 API 服务（自动启动）
-│   ├── ts-protocol/        # TS3 客户端协议
-│   │   ├── client.ts       # 完整客户端（ECDH + AES-EAX 加密）
-│   │   ├── identity.ts     # Ed25519 身份生成
-│   │   ├── commands.ts     # TS3 命令编解码
-│   │   ├── connection.ts   # TCP ServerQuery 连接
-│   │   └── voice.ts        # UDP 语音包发送
-│   ├── web/                # Web 后端
-│   │   ├── server.ts       # Express + WebSocket 服务
-│   │   ├── websocket.ts    # 实时状态广播
-│   │   └── api/            # REST API 路由
-│   │       ├── bot.ts      # 机器人管理 CRUD
-│   │       ├── music.ts    # 搜索/歌单/歌词/音质
-│   │       ├── player.ts   # 播放控制/队列/历史/跳转
-│   │       └── auth.ts     # QR登录/Cookie/SMS
-│   └── index.ts            # 入口（启动所有服务）
-├── web/src/                # 前端源码 (Vue.js)
-│   ├── components/         # Player, Navbar, Queue, CoverArt, SongCard
-│   ├── views/              # Home, Search, Playlist, Lyrics, History, Settings, Setup
-│   ├── stores/             # Pinia 状态管理（含服务端时间同步）
-│   ├── composables/        # WebSocket 自动重连
-│   └── styles/             # SCSS 主题变量（深色/浅色）
-├── scripts/                # 部署脚本
-│   ├── setup.bat           # Windows 首次安装（自动装 Node.js + 依赖）
-│   ├── start.bat           # Windows 启动脚本
-│   ├── install.sh          # Linux 一键安装 + systemd 服务
-│   └── docker/             # Docker 部署
-│       ├── Dockerfile
-│       └── docker-compose.yml
-├── data/                   # 运行时数据（自动创建）
-│   ├── tsmusicbot.db       # SQLite 数据库
-│   ├── cookies/            # 登录 Cookie
-│   └── logs/               # 日志文件
-└── config.json             # 配置文件（首次运行自动生成）
+├── src/                        # Backend (TypeScript)
+│   ├── audio/                  # Audio pipeline: FFmpeg → PCM → Opus → 20ms frames
+│   │   ├── encoder.ts          # Opus encoder (@discordjs/opus)
+│   │   ├── player.ts           # FFmpeg player (bundled ffmpeg-static, frame-count tracking)
+│   │   └── queue.ts            # Play queue (4 modes, lazy URL)
+│   ├── bot/                    # Bot core
+│   │   ├── commands.ts         # Text command parser (prefix, aliases, permissions)
+│   │   ├── instance.ts         # Bot instance (TS3 + player + music provider)
+│   │   └── manager.ts          # Multi-instance lifecycle
+│   ├── data/                   # Data layer
+│   │   ├── config.ts           # JSON config
+│   │   └── database.ts         # SQLite (history, instances)
+│   ├── music/                  # Music sources
+│   │   ├── provider.ts         # Unified MusicProvider interface
+│   │   ├── netease.ts          # NetEase Cloud Music adapter
+│   │   ├── qq.ts               # QQ Music adapter
+│   │   ├── auth.ts             # Cookie persistence
+│   │   └── api-server.ts       # Embedded API servers (auto-start)
+│   ├── ts-protocol/            # TS3 client protocol
+│   │   └── client.ts           # Full client (ECDH + AES-EAX encryption)
+│   ├── web/                    # Web backend
+│   │   ├── server.ts           # Express + WebSocket
+│   │   └── api/                # REST API (bot, music, player, auth)
+│   └── index.ts                # Entry point
+├── web/src/                    # Frontend (Vue 3)
+│   ├── components/             # Player, Navbar, Queue, CoverArt, SongCard
+│   ├── views/                  # Home, Search, Playlist, Lyrics, History, Settings, Setup
+│   ├── stores/                 # Pinia (server-synced elapsed time)
+│   └── styles/                 # SCSS theme (dark/light)
+├── scripts/
+│   ├── setup.bat               # Windows first-time setup
+│   ├── start.bat               # Windows start script
+│   ├── install.sh              # Linux installer + systemd
+│   └── docker/                 # Dockerfile + docker-compose.yml
+├── data/                       # Runtime (auto-created): DB, cookies, logs
+└── config.json                 # Config (auto-generated on first run)
 ```
 
-## 技术栈
+## Tech Stack
 
-| 层级 | 技术 |
-|------|------|
-| **运行时** | Node.js 20+, TypeScript 5 |
-| **后端框架** | Express 4, WebSocket (ws) |
-| **数据库** | better-sqlite3 (SQLite) |
-| **日志** | pino |
-| **音频** | FFmpeg (ffmpeg-static), @discordjs/opus |
-| **TS3 协议** | @honeybbq/teamspeak-client（完整客户端协议） |
-| **网易云 API** | NeteaseCloudMusicApi |
-| **QQ 音乐 API** | @sansenjian/qq-music-api |
-| **前端框架** | Vue 3, Vite 5 |
-| **状态管理** | Pinia |
-| **路由** | Vue Router 4 |
-| **样式** | SCSS（YesPlayMusic 设计风格） |
-| **图标** | @iconify/vue |
+| Layer | Technology |
+|-------|-----------|
+| Runtime | Node.js 20+, TypeScript 5 |
+| Backend | Express 4, WebSocket (ws) |
+| Database | better-sqlite3 (SQLite) |
+| Audio | FFmpeg (ffmpeg-static), @discordjs/opus |
+| TS3 Protocol | @honeybbq/teamspeak-client (full ECDH + AES-EAX) |
+| NetEase API | NeteaseCloudMusicApi |
+| QQ Music API | @sansenjian/qq-music-api |
+| Frontend | Vue 3, Vite 5, Pinia, Vue Router 4 |
+| Styling | SCSS (YesPlayMusic-inspired design) |
+| Icons | @iconify/vue |
+| Logging | pino |
 
-## 致谢
+## Configuration
 
-- [YesPlayMusic](https://github.com/qier222/YesPlayMusic) — UI 设计灵感
-- [TS3AudioBot](https://github.com/Splamy/TS3AudioBot) — 架构参考
-- [TS3AudioBot-NetEaseCloudmusic-plugin](https://github.com/ZHANGTIANYAO1/TS3AudioBot-NetEaseCloudmusic-plugin) — 懒加载设计参考
-- [NeteaseCloudMusicApi](https://github.com/Binaryify/NeteaseCloudMusicApi) — 网易云音乐 API
-- [@sansenjian/qq-music-api](https://github.com/sansenjian/qq-music-api) — QQ 音乐 API
-- [@honeybbq/teamspeak-client](https://www.npmjs.com/package/@honeybbq/teamspeak-client) — TS3 客户端协议
+The `config.json` file is auto-generated on first run:
+
+```json
+{
+  "webPort": 3000,
+  "locale": "zh",
+  "theme": "dark",
+  "commandPrefix": "!",
+  "commandAliases": { "p": "play", "s": "skip", "n": "next" },
+  "neteaseApiPort": 3001,
+  "qqMusicApiPort": 3200,
+  "adminPassword": "",
+  "adminGroups": [],
+  "autoReturnDelay": 300,
+  "autoPauseOnEmpty": true
+}
+```
+
+## FAQ
+
+**Q: Bot connects but no sound in TeamSpeak?**
+A: Make sure the bot is in the same channel as you. Check volume (`!vol 75`). Ensure the song has a playable URL (some VIP songs require login).
+
+**Q: "Cannot get play URL" error?**
+A: Login to your music account in Settings (QR code scan). Many songs require authentication.
+
+**Q: How to change the bot's TS channel?**
+A: Use `!move <channel name>` command, or set default channel in Settings when creating the bot.
+
+**Q: Can I run multiple bots?**
+A: Yes. Create additional bot instances in Settings page, each connecting to a different TS server or channel.
+
+**Q: Port 3200 already in use?**
+A: The QQ Music API auto-starts on port 3200. If a previous instance is still running, the app will reuse it. Kill old `node` processes if needed.
+
+**Q: Docker build fails?**
+A: Native modules (opus, sqlite3) need compilation tools. The Dockerfile includes them. Make sure Docker has enough memory (2GB+).
+
+## Contributing
+
+1. Fork the repository
+2. Create your feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'feat: add amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
+
+## Acknowledgments
+
+- [YesPlayMusic](https://github.com/qier222/YesPlayMusic) — UI design inspiration
+- [TS3AudioBot](https://github.com/Splamy/TS3AudioBot) — Architecture reference
+- [TS3AudioBot-NetEaseCloudmusic-plugin](https://github.com/ZHANGTIANYAO1/TS3AudioBot-NetEaseCloudmusic-plugin) — Lazy loading pattern
+- [NeteaseCloudMusicApi](https://github.com/Binaryify/NeteaseCloudMusicApi) — NetEase Cloud Music API
+- [@sansenjian/qq-music-api](https://github.com/sansenjian/qq-music-api) — QQ Music API
+- [@honeybbq/teamspeak-client](https://www.npmjs.com/package/@honeybbq/teamspeak-client) — TS3 client protocol
 
 ## License
 
-MIT
+[MIT](LICENSE)
