@@ -562,32 +562,36 @@ async function deleteBot(botId: string, botName: string) {
   if (!confirm(`确认删除机器人 "${botName}"？此操作不可撤销。`)) return;
   try {
     await axios.delete(`/api/bot/${botId}`);
+    // If deleted bot was the active one, reset activeBotId
+    if (store.activeBotId === botId) {
+      store.activeBotId = null;
+    }
+    store.removeBotStatus(botId);
     await store.fetchBots();
   } catch {
     // Ignore
   }
 }
 
-function openEditBot(bot: any) {
+async function openEditBot(bot: any) {
   editingBot.value = bot.id;
-  // We need to fetch the saved config from server
-  // For now use the status info we have
   editForm.name = bot.name;
-  editForm.serverAddress = '';
-  editForm.serverPort = 9987;
-  editForm.nickname = '';
-  editForm.defaultChannel = '';
-  editForm.channelPassword = '';
-  // Try to get saved config
-  axios.get(`/api/bot/${bot.id}/config`).then(res => {
-    if (res.data) {
-      editForm.serverAddress = res.data.serverAddress ?? '';
-      editForm.serverPort = res.data.serverPort ?? 9987;
-      editForm.nickname = res.data.nickname ?? '';
-      editForm.defaultChannel = res.data.defaultChannel ?? '';
-      editForm.channelPassword = res.data.channelPassword ?? '';
-    }
-  }).catch(() => {});
+  // Fetch saved config to fill all fields
+  try {
+    const res = await axios.get(`/api/bot/${bot.id}/config`);
+    editForm.serverAddress = res.data.serverAddress ?? '';
+    editForm.serverPort = res.data.serverPort ?? 9987;
+    editForm.nickname = res.data.nickname ?? '';
+    editForm.defaultChannel = res.data.defaultChannel ?? '';
+    editForm.channelPassword = res.data.channelPassword ?? '';
+  } catch {
+    // Config not found — use defaults
+    editForm.serverAddress = '';
+    editForm.serverPort = 9987;
+    editForm.nickname = bot.name;
+    editForm.defaultChannel = '';
+    editForm.channelPassword = '';
+  }
 }
 
 async function saveEditBot() {

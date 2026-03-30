@@ -107,7 +107,12 @@ export class BotManager {
       defaultChannel: params.defaultChannel ?? existing.defaultChannel,
       channelPassword: params.channelPassword ?? existing.channelPassword,
     });
-    this.logger.info({ botId: id }, "Bot instance config updated (restart to apply)");
+    // Update in-memory name immediately (other fields need reconnect)
+    const bot = this.bots.get(id);
+    if (bot && params.name) {
+      bot.name = params.name;
+    }
+    this.logger.info({ botId: id }, "Bot instance config updated (connection changes need restart)");
   }
 
   getBotConfig(id: string): import("../data/database.js").BotInstance | undefined {

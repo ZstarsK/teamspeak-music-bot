@@ -43,7 +43,7 @@ export interface BotStatus {
 
 export class BotInstance extends EventEmitter {
   readonly id: string;
-  readonly name: string;
+  name: string;
 
   private tsClient: TS3Client;
   private player: AudioPlayer;
