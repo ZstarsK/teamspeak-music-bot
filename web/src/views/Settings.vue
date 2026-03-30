@@ -634,6 +634,7 @@ async function savePrefix() {
 }
 
 onMounted(() => {
+  store.fetchBots(); // Refresh bot status on page visit
   checkAuthStatus();
   loadQuality();
 });
