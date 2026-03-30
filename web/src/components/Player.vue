@@ -24,13 +24,13 @@
         </div>
       </div>
 
-      <div class="player-left">
+      <RouterLink to="/lyrics" class="player-left">
         <CoverArt :url="currentSong.coverUrl" :size="40" />
         <div class="song-info">
           <div class="song-name">{{ currentSong.name }}</div>
           <div class="song-artist">{{ currentSong.artist }}</div>
         </div>
-      </div>
+      </RouterLink>
 
       <div class="player-center">
         <span class="time-display time-current">{{ formatTime(currentElapsed) }}</span>
@@ -277,6 +277,11 @@ function cycleMode() {
   align-items: center;
   gap: 12px;
   width: 240px;
+  text-decoration: none;
+  color: inherit;
+  cursor: pointer;
+  transition: opacity var(--transition-fast);
+  &:hover { opacity: 0.8; }
 }
 
 .song-info {
