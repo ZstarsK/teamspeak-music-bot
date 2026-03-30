@@ -24,6 +24,16 @@ export function createBotRouter(
     res.json(bot.getStatus());
   });
 
+  // Get saved config for a bot
+  router.get("/:id/config", (req, res) => {
+    const saved = botManager.getBotConfig(req.params.id);
+    if (!saved) {
+      res.status(404).json({ error: "Bot config not found" });
+      return;
+    }
+    res.json(saved);
+  });
+
   router.post("/", async (req, res) => {
     try {
       const {
@@ -53,6 +63,26 @@ export function createBotRouter(
       res.status(201).json(bot.getStatus());
     } catch (err) {
       logger.error({ err }, "Failed to create bot");
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // Update bot config (must be stopped first to apply connection changes)
+  router.put("/:id", async (req, res) => {
+    try {
+      const bot = botManager.getBot(req.params.id);
+      if (!bot) {
+        res.status(404).json({ error: "Bot not found" });
+        return;
+      }
+      const { name, serverAddress, serverPort, nickname, defaultChannel, channelPassword } = req.body;
+      // Update in database
+      botManager.updateBot(req.params.id, {
+        name, serverAddress, serverPort, nickname, defaultChannel, channelPassword,
+      });
+      res.json({ success: true });
+    } catch (err) {
+      logger.error({ err }, "Failed to update bot");
       res.status(500).json({ error: (err as Error).message });
     }
   });

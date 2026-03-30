@@ -36,17 +36,79 @@
             <button class="btn-sm" @click="toggleBot(bot.id, bot.connected)">
               {{ bot.connected ? '停止' : '启动' }}
             </button>
+            <button class="btn-sm btn-edit" @click="openEditBot(bot)">
+              <Icon icon="mdi:pencil" />
+            </button>
+            <button class="btn-sm btn-delete" @click="deleteBot(bot.id, bot.name)">
+              <Icon icon="mdi:delete" />
+            </button>
           </div>
         </div>
       </div>
 
+      <!-- Edit Bot Modal -->
+      <div v-if="editingBot" class="edit-modal-overlay" @click.self="editingBot = null">
+        <div class="edit-modal">
+          <h3 class="modal-title">编辑机器人</h3>
+          <div class="form-group">
+            <label>名称</label>
+            <input v-model="editForm.name" class="input" />
+          </div>
+          <div class="form-group">
+            <label>服务器地址</label>
+            <input v-model="editForm.serverAddress" class="input" placeholder="ts.example.com" />
+          </div>
+          <div class="form-row">
+            <div class="form-group" style="flex:1">
+              <label>端口</label>
+              <input v-model.number="editForm.serverPort" type="number" class="input" />
+            </div>
+            <div class="form-group" style="flex:2">
+              <label>昵称</label>
+              <input v-model="editForm.nickname" class="input" />
+            </div>
+          </div>
+          <div class="form-group">
+            <label>默认频道（可选）</label>
+            <input v-model="editForm.defaultChannel" class="input" placeholder="音乐频道" />
+          </div>
+          <div class="form-group">
+            <label>频道密码（可选）</label>
+            <input v-model="editForm.channelPassword" class="input" type="password" />
+          </div>
+          <div class="modal-actions">
+            <button class="btn-secondary" @click="editingBot = null">取消</button>
+            <button class="btn-primary" @click="saveEditBot">保存（需重启机器人生效）</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Create Bot -->
       <div class="create-bot">
         <h3 class="subsection-title">创建新实例</h3>
-        <div class="form-row">
-          <input v-model="newBotName" class="input" placeholder="机器人名称" />
-          <input v-model="newBotServer" class="input" placeholder="TS服务器地址" />
-          <button class="btn-primary" @click="createBot">创建</button>
+        <div class="form-group">
+          <label>名称</label>
+          <input v-model="newBotName" class="input" placeholder="我的音乐机器人" />
         </div>
+        <div class="form-row">
+          <div class="form-group" style="flex:2">
+            <label>服务器地址</label>
+            <input v-model="newBotServer" class="input" placeholder="localhost 或 ts.example.com" />
+          </div>
+          <div class="form-group" style="flex:1">
+            <label>端口</label>
+            <input v-model.number="newBotPort" type="number" class="input" placeholder="9987" />
+          </div>
+        </div>
+        <div class="form-group">
+          <label>昵称</label>
+          <input v-model="newBotNickname" class="input" placeholder="MusicBot" />
+        </div>
+        <div class="form-group">
+          <label>默认频道（可选）</label>
+          <input v-model="newBotChannel" class="input" placeholder="音乐频道" />
+        </div>
+        <button class="btn-primary" @click="createBot">创建</button>
       </div>
     </section>
 
@@ -315,6 +377,21 @@ const store = usePlayerStore();
 
 const newBotName = ref('');
 const newBotServer = ref('');
+const newBotPort = ref(9987);
+const newBotNickname = ref('MusicBot');
+const newBotChannel = ref('');
+
+// Edit bot
+const editingBot = ref<string | null>(null);
+const editForm = reactive({
+  name: '',
+  serverAddress: '',
+  serverPort: 9987,
+  nickname: '',
+  defaultChannel: '',
+  channelPassword: '',
+});
+
 const neteaseCookie = ref('');
 const qqCookie = ref('');
 const bilibiliCookie = ref('');
@@ -465,12 +542,59 @@ async function createBot() {
     await axios.post('/api/bot', {
       name: newBotName.value,
       serverAddress: newBotServer.value,
-      serverPort: 9987,
-      nickname: newBotName.value,
+      serverPort: newBotPort.value || 9987,
+      nickname: newBotNickname.value || newBotName.value,
+      defaultChannel: newBotChannel.value || undefined,
       autoStart: false,
     });
     newBotName.value = '';
     newBotServer.value = '';
+    newBotPort.value = 9987;
+    newBotNickname.value = 'MusicBot';
+    newBotChannel.value = '';
+    await store.fetchBots();
+  } catch {
+    // Ignore
+  }
+}
+
+async function deleteBot(botId: string, botName: string) {
+  if (!confirm(`确认删除机器人 "${botName}"？此操作不可撤销。`)) return;
+  try {
+    await axios.delete(`/api/bot/${botId}`);
+    await store.fetchBots();
+  } catch {
+    // Ignore
+  }
+}
+
+function openEditBot(bot: any) {
+  editingBot.value = bot.id;
+  // We need to fetch the saved config from server
+  // For now use the status info we have
+  editForm.name = bot.name;
+  editForm.serverAddress = '';
+  editForm.serverPort = 9987;
+  editForm.nickname = '';
+  editForm.defaultChannel = '';
+  editForm.channelPassword = '';
+  // Try to get saved config
+  axios.get(`/api/bot/${bot.id}/config`).then(res => {
+    if (res.data) {
+      editForm.serverAddress = res.data.serverAddress ?? '';
+      editForm.serverPort = res.data.serverPort ?? 9987;
+      editForm.nickname = res.data.nickname ?? '';
+      editForm.defaultChannel = res.data.defaultChannel ?? '';
+      editForm.channelPassword = res.data.channelPassword ?? '';
+    }
+  }).catch(() => {});
+}
+
+async function saveEditBot() {
+  if (!editingBot.value) return;
+  try {
+    await axios.put(`/api/bot/${editingBot.value}`, editForm);
+    editingBot.value = null;
     await store.fetchBots();
   } catch {
     // Ignore
@@ -846,6 +970,75 @@ onUnmounted(() => {
   font-weight: 600;
   transition: all var(--transition-fast);
   &:hover { background: var(--color-primary); color: white; }
+}
+
+.btn-edit {
+  padding: 6px 8px;
+  font-size: 14px;
+}
+
+.btn-delete {
+  padding: 6px 8px;
+  font-size: 14px;
+  &:hover { background: #f44336; color: white; }
+}
+
+.btn-secondary {
+  padding: 10px 20px;
+  background: var(--hover-bg);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.bot-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.form-group {
+  margin-bottom: 12px;
+  label {
+    display: block;
+    font-size: 12px;
+    font-weight: 600;
+    margin-bottom: 4px;
+    opacity: 0.7;
+  }
+}
+
+.edit-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.edit-modal {
+  background: var(--bg-secondary);
+  border-radius: var(--radius-lg);
+  padding: 28px;
+  width: 480px;
+  max-width: 90vw;
+  max-height: 80vh;
+  overflow-y: auto;
+}
+
+.modal-title {
+  font-size: 20px;
+  font-weight: 700;
+  margin-bottom: 20px;
+}
+
+.modal-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  margin-top: 20px;
 }
 
 .spin {

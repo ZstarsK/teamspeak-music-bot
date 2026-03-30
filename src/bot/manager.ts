@@ -93,6 +93,27 @@ export class BotManager {
     this.logger.info({ botId: id }, "Bot instance removed");
   }
 
+  updateBot(id: string, params: Partial<CreateBotParams>): void {
+    const instances = this.database.getBotInstances();
+    const existing = instances.find((i) => i.id === id);
+    if (!existing) throw new Error(`Bot ${id} not found`);
+
+    this.database.saveBotInstance({
+      ...existing,
+      name: params.name ?? existing.name,
+      serverAddress: params.serverAddress ?? existing.serverAddress,
+      serverPort: params.serverPort ?? existing.serverPort,
+      nickname: params.nickname ?? existing.nickname,
+      defaultChannel: params.defaultChannel ?? existing.defaultChannel,
+      channelPassword: params.channelPassword ?? existing.channelPassword,
+    });
+    this.logger.info({ botId: id }, "Bot instance config updated (restart to apply)");
+  }
+
+  getBotConfig(id: string): import("../data/database.js").BotInstance | undefined {
+    return this.database.getBotInstances().find((i) => i.id === id);
+  }
+
   getBot(id: string): BotInstance | undefined {
     return this.bots.get(id);
   }
