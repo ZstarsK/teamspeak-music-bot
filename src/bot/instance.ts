@@ -80,12 +80,16 @@ export class BotInstance extends EventEmitter {
 
     this.player.on("trackEnd", () => {
       this.logger.debug("Track ended, advancing queue");
-      this.playNext();
+      this.playNext().catch((err) => {
+        this.logger.error({ err }, "playNext failed after trackEnd");
+      });
     });
 
     this.player.on("error", (err: Error) => {
       this.logger.error({ err }, "Player error");
-      this.playNext();
+      this.playNext().catch((err2) => {
+        this.logger.error({ err: err2 }, "playNext failed after player error");
+      });
     });
   }
 

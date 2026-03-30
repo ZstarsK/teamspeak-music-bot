@@ -79,7 +79,7 @@ export class AudioPlayer extends EventEmitter {
     });
 
     this.ffmpeg.on("close", () => {
-      // Let frame loop drain remaining buffer
+      this.ffmpeg = null; // Signal frame loop that no more data is coming
     });
 
     this.ffmpeg.on("error", (err) => {
