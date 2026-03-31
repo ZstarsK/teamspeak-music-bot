@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, execSync, type ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { createRequire } from "node:module";
 import { accessSync, chmodSync, constants } from "node:fs";
@@ -25,9 +25,28 @@ function isExecutable(binPath: string): boolean {
   }
 }
 
-/** Resolved once at module load — no repeated fs checks per play(). */
-const resolvedFfmpeg: string =
-  ffmpegPath && isExecutable(ffmpegPath) ? ffmpegPath : "ffmpeg";
+/** Test if an ffmpeg binary actually works by running -version. */
+function ffmpegWorks(bin: string): boolean {
+  try {
+    execSync(`"${bin}" -version`, { timeout: 5000, stdio: "pipe" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Resolved once at module load — prefer bundled ffmpeg-static, fall back to system. */
+const resolvedFfmpeg: string = (() => {
+  if (ffmpegPath && isExecutable(ffmpegPath) && ffmpegWorks(ffmpegPath)) {
+    return ffmpegPath;
+  }
+  // Fall back to system ffmpeg
+  if (ffmpegWorks("ffmpeg")) {
+    return "ffmpeg";
+  }
+  // Last resort: return whatever we have, will fail at runtime with clear error
+  return ffmpegPath ?? "ffmpeg";
+})();
 
 /** Resolve ffmpeg binary: prefer bundled ffmpeg-static, fall back to system PATH. */
 function getFfmpegCommand(): string {
@@ -106,7 +125,7 @@ export class AudioPlayer extends EventEmitter {
     );
 
     const ffmpegBin = getFfmpegCommand();
-    this.logger.debug({ ffmpeg: ffmpegBin }, "Using ffmpeg binary");
+    this.logger.info({ ffmpeg: ffmpegBin }, "Using ffmpeg binary");
     this.ffmpeg = spawn(ffmpegBin, args, { stdio: ["ignore", "pipe", "pipe"] });
 
     let gotFirstData = false;
@@ -123,8 +142,8 @@ export class AudioPlayer extends EventEmitter {
       }
     });
 
-    this.ffmpeg.on("close", (code) => {
-      this.logger.info({ exitCode: code, gotData: gotFirstData, framesPlayed: this.framesPlayed }, "FFmpeg process closed");
+    this.ffmpeg.on("close", (code, signal) => {
+      this.logger.info({ exitCode: code, signal, gotData: gotFirstData, framesPlayed: this.framesPlayed }, "FFmpeg process closed");
       if (this.sessionId === playSessionId) {
         this.ffmpeg = null; // Signal frame loop that no more data is coming
       }
