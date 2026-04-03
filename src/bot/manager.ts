@@ -85,6 +85,8 @@ export class BotManager {
       defaultChannel: params.defaultChannel ?? "",
       channelPassword: params.channelPassword ?? "",
       autoStart: params.autoStart ?? false,
+      serverProtocol: params.serverProtocol ?? "",
+      ts6ApiKey: params.ts6ApiKey ?? "",
     });
 
     this.logger.info({ botId: id, name: params.name }, "Bot instance created");
@@ -114,6 +116,8 @@ export class BotManager {
       nickname: params.nickname ?? existing.nickname,
       defaultChannel: params.defaultChannel ?? existing.defaultChannel,
       channelPassword: params.channelPassword ?? existing.channelPassword,
+      serverProtocol: params.serverProtocol ?? existing.serverProtocol,
+      ts6ApiKey: params.ts6ApiKey ?? existing.ts6ApiKey,
     });
     // Update in-memory name immediately (other fields need reconnect)
     const bot = this.bots.get(id);
@@ -150,17 +154,19 @@ export class BotManager {
   async loadSavedBots(): Promise<void> {
     const savedInstances = this.database.getBotInstances();
     for (const saved of savedInstances) {
+      const proto = saved.serverProtocol as "ts3" | "ts6" | "" | undefined;
       const bot = new BotInstance({
         id: saved.id,
         name: saved.name,
         tsOptions: {
           host: saved.serverAddress,
           port: saved.serverPort,
-          queryPort: 10011, // Will be overridden by auto-detection for TS6
+          queryPort: proto === "ts6" ? 10080 : 10011,
           nickname: saved.nickname,
           defaultChannel: saved.defaultChannel || undefined,
           channelPassword: saved.channelPassword || undefined,
-          // Protocol will be auto-detected on connect
+          serverProtocol: proto === "ts3" || proto === "ts6" ? proto : undefined,
+          ts6ApiKey: saved.ts6ApiKey || undefined,
         },
         neteaseProvider: this.neteaseProvider,
         qqProvider: this.qqProvider,

@@ -1,6 +1,5 @@
 import http from "node:http";
 import https from "node:https";
-import { EventEmitter } from "node:events";
 
 export interface HttpQueryOptions {
   host: string;
@@ -31,11 +30,10 @@ export interface HttpQueryResult {
  *   GET  /1/channellist?sid={sid}  → list channels
  *   POST /1/clientupdate           → update client properties
  */
-export class TS6HttpQuery extends EventEmitter {
+export class TS6HttpQuery {
   private options: Required<HttpQueryOptions>;
 
   constructor(options: HttpQueryOptions) {
-    super();
     this.options = {
       host: options.host,
       port: options.port,
@@ -68,6 +66,13 @@ export class TS6HttpQuery extends EventEmitter {
     }
 
     return new Promise((resolve, reject) => {
+      let settled = false;
+      const fail = (err: Error) => {
+        if (settled) return;
+        settled = true;
+        reject(err);
+      };
+
       const req = transport.request(
         {
           hostname: host,
@@ -82,8 +87,10 @@ export class TS6HttpQuery extends EventEmitter {
           let data = "";
           res.setEncoding("utf-8");
           res.on("data", (chunk: string) => (data += chunk));
-          res.on("error", reject);
+          res.on("error", fail);
           res.on("end", () => {
+            if (settled) return;
+            settled = true;
             let parsed: unknown;
             try {
               parsed = JSON.parse(data);
@@ -98,10 +105,10 @@ export class TS6HttpQuery extends EventEmitter {
         },
       );
 
-      req.on("error", reject);
+      req.on("error", fail);
       req.on("timeout", () => {
         req.destroy();
-        reject(new Error("TS6 HTTP Query timeout"));
+        fail(new Error("TS6 HTTP Query timeout"));
       });
 
       if (bodyStr) {

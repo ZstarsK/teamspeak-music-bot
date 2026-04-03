@@ -24,6 +24,10 @@ export interface BotInstance {
   defaultChannel: string;
   channelPassword: string;
   autoStart: boolean;
+  /** "ts3" | "ts6" | "" (empty = auto-detect) */
+  serverProtocol: string;
+  /** API key for TS6 HTTP Query */
+  ts6ApiKey: string;
 }
 
 export interface BotDatabase {
@@ -58,7 +62,9 @@ function initTables(db: Database.Database): void {
       nickname TEXT NOT NULL,
       defaultChannel TEXT NOT NULL,
       channelPassword TEXT NOT NULL,
-      autoStart INTEGER NOT NULL DEFAULT 0
+      autoStart INTEGER NOT NULL DEFAULT 0,
+      serverProtocol TEXT NOT NULL DEFAULT '',
+      ts6ApiKey TEXT NOT NULL DEFAULT ''
     );
   `);
 }
@@ -78,8 +84,8 @@ export function createDatabase(dbPath: string): BotDatabase {
   `);
 
   const upsertInstance = db.prepare(`
-    INSERT INTO bot_instances (id, name, serverAddress, serverPort, nickname, defaultChannel, channelPassword, autoStart)
-    VALUES (@id, @name, @serverAddress, @serverPort, @nickname, @defaultChannel, @channelPassword, @autoStart)
+    INSERT INTO bot_instances (id, name, serverAddress, serverPort, nickname, defaultChannel, channelPassword, autoStart, serverProtocol, ts6ApiKey)
+    VALUES (@id, @name, @serverAddress, @serverPort, @nickname, @defaultChannel, @channelPassword, @autoStart, @serverProtocol, @ts6ApiKey)
     ON CONFLICT(id) DO UPDATE SET
       name = excluded.name,
       serverAddress = excluded.serverAddress,
@@ -87,7 +93,9 @@ export function createDatabase(dbPath: string): BotDatabase {
       nickname = excluded.nickname,
       defaultChannel = excluded.defaultChannel,
       channelPassword = excluded.channelPassword,
-      autoStart = excluded.autoStart
+      autoStart = excluded.autoStart,
+      serverProtocol = excluded.serverProtocol,
+      ts6ApiKey = excluded.ts6ApiKey
   `);
 
   const selectInstances = db.prepare(`SELECT * FROM bot_instances`);

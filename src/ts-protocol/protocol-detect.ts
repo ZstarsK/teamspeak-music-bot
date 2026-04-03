@@ -67,11 +67,13 @@ function probeTS3Query(host: string, port: number, timeoutMs: number): Promise<b
 
     const socket = net.createConnection({ host, port, timeout: timeoutMs });
     let banner = "";
+    const MAX_BANNER = 256; // TS3 banner is ~50 bytes; cap to avoid memory abuse
 
     socket.setTimeout(timeoutMs);
 
     socket.on("data", (data: Buffer) => {
       banner += data.toString("utf-8");
+      if (banner.length > MAX_BANNER) banner = banner.slice(0, MAX_BANNER);
       if (banner.includes("TS3")) {
         done(true);
       }

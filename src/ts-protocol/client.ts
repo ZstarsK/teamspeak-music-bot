@@ -53,6 +53,7 @@ export class TS3Client extends EventEmitter {
   private disconnecting = false;
   private detectedProtocol: ServerProtocol = "unknown";
   private httpQuery: TS6HttpQuery | null = null;
+  private udpErrorTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(private options: TS3ClientOptions, logger: Logger) {
     super();
@@ -118,6 +119,14 @@ export class TS3Client extends EventEmitter {
       });
     }
 
+    // Guard against calling connect() while already connected
+    if (this.client) {
+      this.logger.warn("connect() called while already connected, disconnecting first");
+      this.disconnect();
+      // Give the old client a moment to tear down
+      await new Promise((r) => setTimeout(r, 100));
+    }
+
     this.logger.info(
       { addr, protocol: this.detectedProtocol },
       "Connecting to TeamSpeak server (full client protocol)",
@@ -125,19 +134,18 @@ export class TS3Client extends EventEmitter {
 
     // Throttle repeated "udp send error" warnings (fires every 20ms during playback if UDP breaks)
     let udpErrorCount = 0;
-    let udpErrorTimer: ReturnType<typeof setTimeout> | null = null;
     const throttledWarn = (msg: string, ...args: unknown[]) => {
       if (typeof msg === "string" && msg.includes("udp send error")) {
         udpErrorCount++;
         if (udpErrorCount === 1) {
           this.logger.warn(msg);
           // After 2 seconds, log a summary and reset
-          udpErrorTimer = setTimeout(() => {
+          this.udpErrorTimer = setTimeout(() => {
             if (udpErrorCount > 1) {
               this.logger.warn(`udp send error (repeated ${udpErrorCount} times, connection may be lost)`);
             }
             udpErrorCount = 0;
-            udpErrorTimer = null;
+            this.udpErrorTimer = null;
           }, 2000);
         }
         return;
@@ -285,6 +293,10 @@ export class TS3Client extends EventEmitter {
     this.clientId = 0;
     this.httpQuery = null;
     this.detectedProtocol = "unknown";
+    if (this.udpErrorTimer) {
+      clearTimeout(this.udpErrorTimer);
+      this.udpErrorTimer = null;
+    }
     this.logger.info("Disconnected from TeamSpeak server");
   }
 }
