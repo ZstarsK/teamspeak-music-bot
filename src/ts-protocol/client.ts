@@ -10,14 +10,15 @@ import {
   type Identity,
   type TextMessage,
   type ClientInfo,
+  type CommandMiddleware,
 } from "@honeybbq/teamspeak-client";
 import type { Logger } from "../logger.js";
 import {
   detectServerProtocol,
   type ServerProtocol,
-  type ProtocolDetectResult,
 } from "./protocol-detect.js";
 import { TS6HttpQuery } from "./http-query.js";
+import { ts6VersionMiddleware } from "./ts6-compat.js";
 
 export { CODEC_OPUS_MUSIC } from "./voice.js";
 export type { ServerProtocol } from "./protocol-detect.js";
@@ -153,6 +154,13 @@ export class TS3Client extends EventEmitter {
       this.logger.warn(msg);
     };
 
+    // Apply TS6 version middleware if connecting to a TS6 server
+    const commandMiddleware: CommandMiddleware[] = [];
+    if (this.detectedProtocol === "ts6") {
+      commandMiddleware.push(ts6VersionMiddleware("3.6.2"));
+      this.logger.info("Applying TS6 compatibility: upgrading client_version to 3.6.2");
+    }
+
     this.client = new TS3FullClient(this.identity, addr, this.options.nickname, {
       logger: {
         debug: (msg) => this.logger.debug(msg),
@@ -160,6 +168,7 @@ export class TS3Client extends EventEmitter {
         warn: throttledWarn,
         error: (msg) => this.logger.error(msg),
       },
+      commandMiddleware,
     });
 
     this.client.on("textMessage", (msg: TextMessage) => {

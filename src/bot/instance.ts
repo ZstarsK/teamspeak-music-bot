@@ -494,14 +494,19 @@ export class BotInstance extends EventEmitter {
       this.voteSkipUsers.clear();
       const next = this.queue.next();
       if (next) {
-        const ok = await this.resolveAndPlay(next);
-        if (!ok) {
+        let started = await this.resolveAndPlay(next);
+        if (!started) {
           // Skip to next if URL resolve fails (up to 3 retries)
           for (let i = 0; i < 3; i++) {
             const retry = this.queue.next();
             if (!retry) break;
-            if (await this.resolveAndPlay(retry)) break;
+            if (await this.resolveAndPlay(retry)) {
+              started = true;
+              break;
+            }
           }
+        }
+        if (!started) {
           this.player.stop();
         }
       } else {
