@@ -1,11 +1,11 @@
 <p align="center">
-  <img src="https://img.shields.io/badge/TeamSpeak_3-音乐机器人-blue?style=for-the-badge&logo=teamspeak" alt="TSMusicBot" />
+  <img src="https://img.shields.io/badge/TeamSpeak-音乐机器人-blue?style=for-the-badge&logo=teamspeak" alt="TSMusicBot" />
 </p>
 
 <h1 align="center">TSMusicBot</h1>
 
 <p align="center">
-  <strong>TeamSpeak 3 音乐机器人</strong> — 网易云音乐 + QQ 音乐 + 哔哩哔哩 三平台，YesPlayMusic 风格 WebUI 控制面板
+  <strong>TeamSpeak 音乐机器人</strong> — 网易云音乐 + QQ 音乐 + 哔哩哔哩 三平台，YesPlayMusic 风格 WebUI 控制面板
 </p>
 
 <p align="center">
@@ -16,14 +16,51 @@
   <img src="https://img.shields.io/badge/FFmpeg-已内置-orange?logo=ffmpeg" />
   <img src="https://img.shields.io/badge/Docker-支持-2496ED?logo=docker&logoColor=white" />
   <img src="https://img.shields.io/badge/BiliBili-支持-00a1d6?logo=bilibili&logoColor=white" />
+  <img src="https://img.shields.io/badge/TS3-支持-2580C3?logo=teamspeak&logoColor=white" />
+  <img src="https://img.shields.io/badge/TS6-支持-2580C3?logo=teamspeak&logoColor=white" />
 </p>
+
+> **`dev` 分支** — 活跃开发分支，包含最新特性和 bug 修复。
+> 如需稳定版本，请切换到 [`main`](https://github.com/ZHANGTIANYAO1/teamspeak-music-bot/tree/main) 分支。
+
+---
+
+## dev 分支最新变更
+
+### TS3/TS6 双协议支持
+
+本分支新增了 TeamSpeak 6 Server 的完整支持。TS6 Server（[teamspeak/teamspeak6-server](https://github.com/teamspeak/teamspeak6-server)）是 TeamSpeak 全新的自托管服务器，与 TS3 Server 存在协议层差异。
+
+**新增模块：**
+
+| 文件 | 说明 |
+|------|------|
+| `src/ts-protocol/protocol-detect.ts` | 服务器协议自动检测（并行探测 TS3 port 10011 + TS6 port 10080） |
+| `src/ts-protocol/http-query.ts` | TS6 HTTP Query 客户端（替代 TS3 已废弃的 raw TCP ServerQuery） |
+| `src/ts-protocol/ts6-compat.ts` | TS6 兼容中间件（升级 clientinit 版本号 + 签名） |
+
+**关键改动：**
+
+- **自动协议检测** — 连接时自动判断目标服务器是 TS3 还是 TS6，无需手动配置
+- **TS6 HTTP Query** — TS6 用 HTTP API（10080/10443）替代了 TS3 的 raw TCP ServerQuery（10011），已适配
+- **clientinit 版本升级** — 通过 CommandMiddleware 将客户端版本从 3.5.3 升级到 3.6.2（含匹配 ECDSA 签名），避免 TS6 服务器拒绝连接
+- **License block type 8** — `@honeybbq/teamspeak-client` 已内置 `Ts5Server` 类型支持，握手兼容 TS6
+- **数据库持久化** — `serverProtocol` 和 `ts6ApiKey` 配置持久化到 SQLite，重启不丢失
+
+**Bug 修复：**
+
+- 修复 `playNext()` 重试逻辑中成功重试后仍执行 `player.stop()` 的 bug
+- 修复协议探测中 `probeTS3Query` 双重 resolve 竞态条件
+- 修复 `disconnect()` 未清理 `httpQuery` / `udpErrorTimer` 的内存泄漏
+- 修复 `TS6HttpQuery.request()` 双重 reject 问题
+- 添加重复 `connect()` 调用的保护（先断开旧连接）
 
 ---
 
 ## 功能特性
 
 - **三平台音源** — 网易云音乐 + QQ 音乐 + 哔哩哔哩，统一搜索，结果标注来源
-- **真实 TS3 客户端协议** — 机器人在 TeamSpeak 中可见（非 ServerQuery 隐身模式），兼容 TS3/TS5/TS6 服务器
+- **真实客户端协议 (TS3/TS6 双协议)** — 机器人在 TeamSpeak 中可见（非 ServerQuery 隐身模式），自动检测并适配 TS3 和 TS6 服务器，支持 TS6 HTTP Query API
 - **YesPlayMusic 风格 WebUI** — 精美界面，支持深色/浅色主题切换
 - **完整播放控制** — 播放/暂停/上一首/下一首/进度跳转/音量调节
 - **四种播放模式** — 顺序播放/循环播放/随机播放/随机循环
@@ -207,8 +244,11 @@ tsmusicbot/
 │   │   ├── bilibili.ts         # 哔哩哔哩适配器（视频音频提取）
 │   │   ├── auth.ts             # Cookie 持久化存储
 │   │   └── api-server.ts       # 嵌入式 API 服务（自动启动）
-│   ├── ts-protocol/            # TS3 客户端协议
-│   │   └── client.ts           # 完整客户端（ECDH + AES-EAX 加密协议）
+│   ├── ts-protocol/            # TeamSpeak 客户端协议（TS3/TS6 双协议）
+│   │   ├── client.ts           # 完整客户端（ECDH + AES-EAX 加密协议）
+│   │   ├── protocol-detect.ts  # 服务器协议自动检测（TS3 vs TS6）
+│   │   ├── http-query.ts       # TS6 HTTP Query 客户端（替代 TS3 ServerQuery）
+│   │   └── ts6-compat.ts       # TS6 兼容中间件（版本升级 + 签名）
 │   ├── web/                    # Web 后端
 │   │   ├── server.ts           # Express + WebSocket 服务
 │   │   ├── websocket.ts        # 实时状态广播
@@ -246,7 +286,7 @@ tsmusicbot/
 | **后端框架** | Express 4, WebSocket (ws) |
 | **数据库** | better-sqlite3 (SQLite) |
 | **音频处理** | FFmpeg (ffmpeg-static 内置), @discordjs/opus |
-| **TS 协议** | @honeybbq/teamspeak-client（完整客户端协议，兼容 TS3/TS5/TS6） |
+| **TS 协议** | @honeybbq/teamspeak-client（完整客户端协议）+ 自研 TS6 协议适配层 |
 | **网易云 API** | NeteaseCloudMusicApi |
 | **QQ 音乐 API** | @sansenjian/qq-music-api |
 | **哔哩哔哩** | BiliBili Web API（搜索、DASH 音频流、QR 登录） |
@@ -276,6 +316,9 @@ tsmusicbot/
 ```
 
 ## 常见问题
+
+**Q：支持 TeamSpeak 6 Server 吗？**
+A：支持。`dev` 分支已实现 TS3/TS6 双协议支持，连接时会自动检测服务器类型。如果自动检测失败（例如 Query 端口被防火墙屏蔽），可以在创建机器人时手动指定 `serverProtocol: "ts6"`。TS6 Server 的 HTTP Query API（端口 10080）也已适配，需要时可配置 `ts6ApiKey`。
 
 **Q：机器人连接了但 TeamSpeak 中听不到音乐？**
 A：确保机器人和你在同一个频道。检查音量（`!vol 75`）。部分 VIP 歌曲需要先登录账号。
@@ -322,6 +365,7 @@ A：`git pull` 拉取最新代码，然后 `npm install && npm run build && npm 
 
 | 项目 | 说明 |
 |------|------|
+| [yichen11818/NeteaseTSBot](https://github.com/yichen11818/NeteaseTSBot) | TS6 协议兼容参考（vendored tsproto 补丁） |
 | [Splamy/TS3AudioBot](https://github.com/Splamy/TS3AudioBot) | 优秀的 TeamSpeak 音频机器人框架 |
 | [TS3AudioBot-BiliBiliPlugin](https://github.com/xxmod/TS3AudioBot-BiliBiliPlugin) | 提供插件开发参考 |
 | [TS3AudioBot-NetEaseCloudmusic-plugin](https://github.com/ZHANGTIANYAO1/TS3AudioBot-NetEaseCloudmusic-plugin) | 提供插件开发参考和懒加载设计参考 |
