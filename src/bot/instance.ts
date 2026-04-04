@@ -105,6 +105,9 @@ export class BotInstance extends EventEmitter {
     });
 
     this.tsClient.on("disconnected", () => {
+      // Avoid duplicate event if disconnect() was called explicitly
+      // (it already set connected = false and emitted "disconnected").
+      if (!this.connected) return;
       this.connected = false;
       this.player.stop();
       this.emit("disconnected");
@@ -119,8 +122,10 @@ export class BotInstance extends EventEmitter {
 
   disconnect(): void {
     this.player.stop();
-    this.tsClient.disconnect();
+    // Set connected = false BEFORE tsClient.disconnect() so that the
+    // "disconnected" event handler (setupTsEvents) won't emit a duplicate.
     this.connected = false;
+    this.tsClient.disconnect();
     this.emit("disconnected");
   }
 
@@ -488,7 +493,7 @@ export class BotInstance extends EventEmitter {
   }
 
   private async playNext(): Promise<void> {
-    if (this.isAdvancing) return;
+    if (this.isAdvancing || !this.connected) return;
     this.isAdvancing = true;
     try {
       this.voteSkipUsers.clear();
@@ -497,7 +502,7 @@ export class BotInstance extends EventEmitter {
         let started = await this.resolveAndPlay(next);
         if (!started) {
           // Skip to next if URL resolve fails (up to 3 retries)
-          for (let i = 0; i < 3; i++) {
+          for (let i = 0; i < 3 && this.connected; i++) {
             const retry = this.queue.next();
             if (!retry) break;
             if (await this.resolveAndPlay(retry)) {

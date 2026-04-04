@@ -10,7 +10,6 @@ import {
   type Identity,
   type TextMessage,
   type ClientInfo,
-  type CommandMiddleware,
 } from "@honeybbq/teamspeak-client";
 import type { Logger } from "../logger.js";
 import {
@@ -18,7 +17,7 @@ import {
   type ServerProtocol,
 } from "./protocol-detect.js";
 import { TS6HttpQuery } from "./http-query.js";
-import { ts6VersionMiddleware } from "./ts6-compat.js";
+import { patchClientInitVersion } from "./ts6-compat.js";
 
 export { CODEC_OPUS_MUSIC } from "./voice.js";
 export type { ServerProtocol } from "./protocol-detect.js";
@@ -120,10 +119,15 @@ export class TS3Client extends EventEmitter {
       });
     }
 
-    // Guard against calling connect() while already connected
+    // Guard against calling connect() while already connected.
+    // Save detectedProtocol first because disconnect() resets it.
     if (this.client) {
       this.logger.warn("connect() called while already connected, disconnecting first");
+      const savedProtocol = this.detectedProtocol;
+      const savedHttpQuery = this.httpQuery;
       this.disconnect();
+      this.detectedProtocol = savedProtocol;
+      this.httpQuery = savedHttpQuery;
       // Give the old client a moment to tear down
       await new Promise((r) => setTimeout(r, 100));
     }
@@ -140,7 +144,9 @@ export class TS3Client extends EventEmitter {
         udpErrorCount++;
         if (udpErrorCount === 1) {
           this.logger.warn(msg);
-          // After 2 seconds, log a summary and reset
+          // After 2 seconds, log a summary and reset.
+          // Clear any previous timer to avoid leaking it.
+          if (this.udpErrorTimer) clearTimeout(this.udpErrorTimer);
           this.udpErrorTimer = setTimeout(() => {
             if (udpErrorCount > 1) {
               this.logger.warn(`udp send error (repeated ${udpErrorCount} times, connection may be lost)`);
@@ -154,13 +160,6 @@ export class TS3Client extends EventEmitter {
       this.logger.warn(msg);
     };
 
-    // Apply TS6 version middleware if connecting to a TS6 server
-    const commandMiddleware: CommandMiddleware[] = [];
-    if (this.detectedProtocol === "ts6") {
-      commandMiddleware.push(ts6VersionMiddleware("3.6.2"));
-      this.logger.info("Applying TS6 compatibility: upgrading client_version to 3.6.2");
-    }
-
     this.client = new TS3FullClient(this.identity, addr, this.options.nickname, {
       logger: {
         debug: (msg) => this.logger.debug(msg),
@@ -168,7 +167,6 @@ export class TS3Client extends EventEmitter {
         warn: throttledWarn,
         error: (msg) => this.logger.error(msg),
       },
-      commandMiddleware,
     });
 
     this.client.on("textMessage", (msg: TextMessage) => {
@@ -196,6 +194,37 @@ export class TS3Client extends EventEmitter {
     });
 
     await this.client.connect();
+
+    // Patch handler.sendPacket to intercept clientinit during handshake for TS6.
+    //
+    // Why after connect(): The library's connect() internally calls #S() which
+    // replaces this.handler with a fresh PacketHandler. Any patch applied before
+    // connect() would be discarded. Patching here is safe because connect() only
+    // establishes the UDP socket and sends the first Init1 packet — the actual
+    // clientinit command is sent later in async message callbacks (after Init1
+    // round-trips complete), which cannot fire before this sync continuation.
+    //
+    // Why not commandMiddleware: The library's middleware chain only applies to
+    // post-connection commands (sendCommandNoWait/execCommand). The handshake's
+    // clientinit is sent directly via handler.sendPacket(), bypassing middleware.
+    if (this.detectedProtocol === "ts6") {
+      this.logger.info("Applying TS6 compatibility: upgrading client_version to 3.6.2");
+      const handler = this.client.handler;
+      const origSendPacket = handler.sendPacket.bind(handler);
+      handler.sendPacket = (pType: number, data: Uint8Array, flags: number) => {
+        // PacketType.Command = 2
+        if (pType === 2) {
+          const str = Buffer.from(data).toString("utf-8");
+          if (str.startsWith("clientinit ")) {
+            const patched = patchClientInitVersion(str);
+            origSendPacket(pType, Buffer.from(patched), flags);
+            return;
+          }
+        }
+        origSendPacket(pType, data, flags);
+      };
+    }
+
     await this.client.waitConnected();
     this.clientId = this.client.clientID();
     this.voiceFramesSent = 0;
