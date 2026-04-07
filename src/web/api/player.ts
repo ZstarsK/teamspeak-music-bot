@@ -154,6 +154,7 @@ export function createPlayerRouter(
       }
       const queue = bot.getQueueManager();
       bot.getPlayer().stop(); // Stop current playback first
+      bot.getPlayer().resetFailures(); // Reset on user-initiated play
       const song = queue.playAt(index);
       if (!song) {
         res.status(400).json({ error: "Invalid queue index" });
@@ -200,6 +201,7 @@ export function createPlayerRouter(
 
       // Stop current playback
       bot.getPlayer().stop();
+      bot.getPlayer().resetFailures();
 
       const songs = await provider.getPlaylistSongs(playlistId);
       if (songs.length === 0) {
@@ -256,6 +258,7 @@ export function createPlayerRouter(
       queue.add({ ...song, platform: provider.platform });
       queue.play();
 
+      bot.getPlayer().resetFailures();
       const ok = await bot.resolveAndPlay(queue.current()!);
       if (!ok) {
         res.json({ message: `Cannot play: ${song.name}` });

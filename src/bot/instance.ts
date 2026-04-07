@@ -263,6 +263,8 @@ export class BotInstance extends EventEmitter {
     this.queue.add({ ...song, platform: provider.platform });
     this.queue.play();
 
+    // Reset failure counter on user-initiated play
+    this.player.resetFailures();
     const ok = await this.resolveAndPlay(this.queue.current()!);
     if (!ok) return `Cannot play: ${song.name}`;
     return `Now playing: ${song.name} - ${song.artist}`;

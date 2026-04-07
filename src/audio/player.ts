@@ -37,15 +37,23 @@ function ffmpegWorks(bin: string): boolean {
 
 /** Resolved once at module load — prefer bundled ffmpeg-static, fall back to system. */
 const resolvedFfmpeg: string = (() => {
-  if (ffmpegPath && isExecutable(ffmpegPath) && ffmpegWorks(ffmpegPath)) {
-    return ffmpegPath;
+  // On Windows, ffmpeg-static may return a path with backslashes; on Linux/macOS
+  // it may return a Windows .exe path if node_modules was copied cross-platform.
+  const isWinPath = ffmpegPath ? /\\/.test(ffmpegPath) || ffmpegPath.endsWith(".exe") : false;
+  const onWindows = process.platform === "win32";
+
+  // Only try bundled binary if platform matches
+  if (ffmpegPath && (onWindows === isWinPath)) {
+    if (isExecutable(ffmpegPath) && ffmpegWorks(ffmpegPath)) {
+      return ffmpegPath;
+    }
   }
   // Fall back to system ffmpeg
   if (ffmpegWorks("ffmpeg")) {
     return "ffmpeg";
   }
-  // Last resort: return whatever we have, will fail at runtime with clear error
-  return ffmpegPath ?? "ffmpeg";
+  // Last resort: always use "ffmpeg" so spawn error is clear, never use a cross-platform path
+  return "ffmpeg";
 })();
 
 /** Resolve ffmpeg binary: prefer bundled ffmpeg-static, fall back to system PATH. */
@@ -79,6 +87,9 @@ export class AudioPlayer extends EventEmitter {
   private static readonly BUFFER_HIGH_WATER = 960 * 1024; // ~5s of PCM at 48kHz stereo
   private static readonly BUFFER_LOW_WATER = 480 * 1024;  // ~2.5s
   private ffmpegPaused = false;
+  private spawnFailed = false; // true if ffmpeg spawn errored (prevent trackEnd cascade)
+  private consecutiveFailures = 0;
+  private static readonly MAX_CONSECUTIVE_FAILURES = 3;
 
   constructor(logger: Logger) {
     super();
@@ -94,6 +105,18 @@ export class AudioPlayer extends EventEmitter {
     this.seekOffset = seekSeconds;
     this.framesPlayed = 0;
     this.ffmpegPaused = false;
+    this.spawnFailed = false;
+
+    // Prevent rapid-fire spawn attempts when ffmpeg is broken
+    if (this.consecutiveFailures >= AudioPlayer.MAX_CONSECUTIVE_FAILURES) {
+      this.logger.error(
+        { failures: this.consecutiveFailures, ffmpeg: getFfmpegCommand() },
+        "Too many consecutive ffmpeg failures — ffmpeg binary may be missing or broken. Stopping playback."
+      );
+      this.state = "idle";
+      this.emit("error", new Error("ffmpeg unavailable after repeated failures"));
+      return;
+    }
 
     this.logger.info({ url: url.slice(0, 80), seek: seekSeconds }, "Starting playback");
 
@@ -160,6 +183,8 @@ export class AudioPlayer extends EventEmitter {
     this.ffmpeg.on("error", (err) => {
       this.logger.error({ err }, "FFmpeg error");
       if (this.sessionId === playSessionId) {
+        this.spawnFailed = true;
+        this.consecutiveFailures++;
         this.emit("error", err);
       }
     });
@@ -210,7 +235,13 @@ export class AudioPlayer extends EventEmitter {
         this.frameLoopRunning = false;
         if (this.state !== "idle") {
           this.state = "idle";
-          this.emit("trackEnd");
+          // Don't emit trackEnd if ffmpeg spawn failed — prevents infinite retry cascade
+          if (this.spawnFailed) {
+            this.logger.warn("Suppressing trackEnd due to ffmpeg spawn failure");
+          } else {
+            this.consecutiveFailures = 0; // Reset on successful track completion
+            this.emit("trackEnd");
+          }
         }
         return;
       }
@@ -303,10 +334,16 @@ export class AudioPlayer extends EventEmitter {
     }
     this.pcmBuffer = Buffer.alloc(0);
     this.ffmpegPaused = false;
+    this.spawnFailed = false;
     this.state = "idle";
     this.currentUrl = "";
     this.seekOffset = 0;
     this.framesPlayed = 0;
+  }
+
+  /** Reset the consecutive failure counter (e.g. after user action) */
+  resetFailures(): void {
+    this.consecutiveFailures = 0;
   }
 
   setVolume(vol: number): void {
