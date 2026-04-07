@@ -8,6 +8,7 @@
     "build": "tsc && npm run build:web",
     "build:web": "cd web && npm run build",
     "start": "node dist/index.js",
+    "play": "node dist/index.js",
     "test": "vitest run",
     "test:watch": "vitest"
   },
