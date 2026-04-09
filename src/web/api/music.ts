@@ -1,5 +1,6 @@
 import { Router } from "express";
 import type { MusicProvider } from "../../music/provider.js";
+import { YouTubeProvider } from "../../music/youtube.js";
 import type { Logger } from "../../logger.js";
 
 export function createMusicRouter(
@@ -9,9 +10,11 @@ export function createMusicRouter(
   logger: Logger
 ): Router {
   const router = Router();
+  const youtubeProvider: MusicProvider = new YouTubeProvider();
 
   function getProvider(platform?: string): MusicProvider {
     if (platform === "bilibili") return bilibiliProvider;
+    if (platform === "youtube") return youtubeProvider;
     return platform === "qq" ? qqProvider : neteaseProvider;
   }
 

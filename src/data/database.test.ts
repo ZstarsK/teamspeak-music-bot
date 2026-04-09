@@ -62,6 +62,7 @@ describe("database", () => {
       autoStart: true,
       serverProtocol: "",
       ts6ApiKey: "",
+      serverPassword: "",
     };
 
     botDb.saveBotInstance(instance);
@@ -90,6 +91,7 @@ describe("database", () => {
       autoStart: false,
       serverProtocol: "",
       ts6ApiKey: "",
+      serverPassword: "",
     });
 
     expect(botDb.deleteBotInstance("bot1")).toBe(true);

@@ -6,7 +6,7 @@ export interface PlayHistoryEntry {
   songName: string;
   artist: string;
   album: string;
-  platform: "netease" | "qq" | "bilibili";
+  platform: "netease" | "qq" | "bilibili" | "youtube";
   coverUrl: string;
 }
 
@@ -28,6 +28,8 @@ export interface BotInstance {
   serverProtocol: string;
   /** API key for TS6 HTTP Query */
   ts6ApiKey: string;
+  /** Password to join the TS server (server password) */
+  serverPassword: string;
   identity?: string;
 }
 
@@ -52,6 +54,9 @@ function migrateSchema(db: Database.Database): void {
   }
   if (!names.includes("ts6ApiKey")) {
     db.exec("ALTER TABLE bot_instances ADD COLUMN ts6ApiKey TEXT NOT NULL DEFAULT ''");
+  }
+  if (!names.includes("serverPassword")) {
+    db.exec("ALTER TABLE bot_instances ADD COLUMN serverPassword TEXT NOT NULL DEFAULT ''");
   }
 }
 
@@ -80,6 +85,7 @@ function initTables(db: Database.Database): void {
       autoStart INTEGER NOT NULL DEFAULT 0,
       serverProtocol TEXT NOT NULL DEFAULT '',
       ts6ApiKey TEXT NOT NULL DEFAULT '',
+      serverPassword TEXT NOT NULL DEFAULT '',
       identity TEXT
     );
   `);
@@ -101,8 +107,8 @@ export function createDatabase(dbPath: string): BotDatabase {
   `);
 
   const upsertInstance = db.prepare(`
-    INSERT INTO bot_instances (id, name, serverAddress, serverPort, nickname, defaultChannel, channelPassword, autoStart, serverProtocol, ts6ApiKey, identity)
-    VALUES (@id, @name, @serverAddress, @serverPort, @nickname, @defaultChannel, @channelPassword, @autoStart, @serverProtocol, @ts6ApiKey, @identity)
+    INSERT INTO bot_instances (id, name, serverAddress, serverPort, nickname, defaultChannel, channelPassword, autoStart, serverProtocol, ts6ApiKey, serverPassword, identity)
+    VALUES (@id, @name, @serverAddress, @serverPort, @nickname, @defaultChannel, @channelPassword, @autoStart, @serverProtocol, @ts6ApiKey, @serverPassword, @identity)
     ON CONFLICT(id) DO UPDATE SET
       name = excluded.name,
       serverAddress = excluded.serverAddress,
@@ -113,6 +119,7 @@ export function createDatabase(dbPath: string): BotDatabase {
       autoStart = excluded.autoStart,
       serverProtocol = excluded.serverProtocol,
       ts6ApiKey = excluded.ts6ApiKey,
+      serverPassword = excluded.serverPassword,
       identity = excluded.identity
   `);
 
@@ -148,6 +155,7 @@ export function createDatabase(dbPath: string): BotDatabase {
         autoStart: r.autoStart === 1,
         serverProtocol: r.serverProtocol ?? "",
         ts6ApiKey: r.ts6ApiKey ?? "",
+        serverPassword: r.serverPassword ?? "",
         identity: r.identity ?? undefined,
       }));
     },

@@ -4,6 +4,7 @@ import {
   type BotInstanceOptions,
 } from "./instance.js";
 import type { MusicProvider } from "../music/provider.js";
+import { YouTubeProvider } from "../music/youtube.js";
 import type { BotDatabase } from "../data/database.js";
 import type { BotConfig } from "../data/config.js";
 import type { Logger } from "../logger.js";
@@ -23,6 +24,8 @@ export interface CreateBotParams {
   serverProtocol?: ServerProtocol;
   /** API key for TS6 HTTP Query (port 10080/10443). */
   ts6ApiKey?: string;
+  /** Password required to join the TS server. */
+  serverPassword?: string;
 }
 
 export class BotManager {
@@ -30,6 +33,7 @@ export class BotManager {
   private neteaseProvider: MusicProvider;
   private qqProvider: MusicProvider;
   private bilibiliProvider: MusicProvider;
+  private youtubeProvider: MusicProvider;
   private database: BotDatabase;
   private config: BotConfig;
   private logger: Logger;
@@ -45,6 +49,7 @@ export class BotManager {
     this.neteaseProvider = neteaseProvider;
     this.qqProvider = qqProvider;
     this.bilibiliProvider = bilibiliProvider;
+    this.youtubeProvider = new YouTubeProvider();
     this.database = database;
     this.config = config;
     this.logger = logger;
@@ -63,12 +68,14 @@ export class BotManager {
         nickname: params.nickname,
         defaultChannel: params.defaultChannel,
         channelPassword: params.channelPassword,
+        serverPassword: params.serverPassword,
         serverProtocol: params.serverProtocol,
         ts6ApiKey: params.ts6ApiKey,
       },
       neteaseProvider: this.neteaseProvider,
       qqProvider: this.qqProvider,
       bilibiliProvider: this.bilibiliProvider,
+      youtubeProvider: this.youtubeProvider,
       database: this.database,
       config: this.config,
       logger: this.logger,
@@ -87,6 +94,7 @@ export class BotManager {
       autoStart: params.autoStart ?? false,
       serverProtocol: params.serverProtocol ?? "",
       ts6ApiKey: params.ts6ApiKey ?? "",
+      serverPassword: params.serverPassword ?? "",
     });
 
     this.logger.info({ botId: id, name: params.name }, "Bot instance created");
@@ -118,6 +126,7 @@ export class BotManager {
       channelPassword: params.channelPassword ?? existing.channelPassword,
       serverProtocol: params.serverProtocol ?? existing.serverProtocol,
       ts6ApiKey: params.ts6ApiKey ?? existing.ts6ApiKey,
+      serverPassword: params.serverPassword ?? existing.serverPassword,
     });
     // Update in-memory name immediately (other fields need reconnect)
     const bot = this.bots.get(id);
@@ -157,12 +166,14 @@ export class BotManager {
           nickname: saved.nickname,
           defaultChannel: saved.defaultChannel || undefined,
           channelPassword: saved.channelPassword || undefined,
+          serverPassword: saved.serverPassword || undefined,
           serverProtocol: proto === "ts3" || proto === "ts6" ? proto : undefined,
           ts6ApiKey: saved.ts6ApiKey || undefined,
         },
         neteaseProvider: this.neteaseProvider,
         qqProvider: this.qqProvider,
         bilibiliProvider: this.bilibiliProvider,
+      youtubeProvider: this.youtubeProvider,
         database: this.database,
         config: this.config,
         logger: this.logger,
@@ -204,12 +215,14 @@ export class BotManager {
           identity: saved.identity || undefined,
           defaultChannel: saved.defaultChannel || undefined,
           channelPassword: saved.channelPassword || undefined,
+          serverPassword: saved.serverPassword || undefined,
           serverProtocol: proto === "ts3" || proto === "ts6" ? proto : undefined,
           ts6ApiKey: saved.ts6ApiKey || undefined,
         },
         neteaseProvider: this.neteaseProvider,
         qqProvider: this.qqProvider,
         bilibiliProvider: this.bilibiliProvider,
+      youtubeProvider: this.youtubeProvider,
         database: this.database,
         config: this.config,
         logger: this.logger,

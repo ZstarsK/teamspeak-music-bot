@@ -38,6 +38,12 @@ const router = createRouter({
       name: 'setup',
       component: () => import('../views/Setup.vue'),
     },
+    {
+      // Per-bot URL: /bot/:id — sets active bot then redirects to home
+      path: '/bot/:id',
+      name: 'bot',
+      component: () => import('../views/BotRedirect.vue'),
+    },
   ],
 });
 
