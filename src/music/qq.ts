@@ -153,29 +153,41 @@ export class QQMusicProvider implements MusicProvider {
 
   async getQrCode(): Promise<QrCodeResult> {
     const res = await this.api.get("/getQQLoginQr");
+    const qrsig = res.data?.qrsig ?? "";
+    const ptqrtoken = res.data?.ptqrtoken ?? "";
+    // @sansenjian/qq-music-api's checkQQLoginQr requires BOTH qrsig and
+    // ptqrtoken, so encode both into the opaque key the caller polls with.
     return {
       qrUrl: "",
       qrImg: res.data?.img ?? "",
-      key: res.data?.qrsig ?? res.data?.ptqrtoken ?? "",
+      key: qrsig && ptqrtoken ? `${qrsig}|${ptqrtoken}` : "",
     };
   }
 
   async checkQrCodeStatus(
     key: string
   ): Promise<"waiting" | "scanned" | "confirmed" | "expired"> {
-    const res = await this.api.get("/checkQQLoginQr", {
-      params: { qrsig: key },
-    });
-    const code = res.data?.code ?? res.data?.response?.code;
-    if (code === 0) {
-      if (res.data?.cookie) {
-        this.cookie = res.data.cookie;
+    const [qrsig, ptqrtoken] = key.split("|");
+    if (!qrsig || !ptqrtoken) return "expired";
+    try {
+      // /checkQQLoginQr is POST, and the success body is
+      // { isOk, refresh, message, session: { cookie, ... } }
+      const res = await this.api.post("/checkQQLoginQr", null, {
+        params: { qrsig, ptqrtoken },
+      });
+      if (res.data?.isOk) {
+        const cookie = res.data?.session?.cookie;
+        if (cookie) {
+          this.cookie = cookie;
+        }
+        return "confirmed";
       }
-      return "confirmed";
+      if (res.data?.refresh) return "expired";
+      // The upstream lib does not distinguish "scanned" from "waiting"
+      return "waiting";
+    } catch {
+      return "expired";
     }
-    if (code === 1) return "scanned";
-    if (code === 2) return "waiting";
-    return "expired";
   }
 
   setCookie(cookie: string): void {
@@ -188,20 +200,32 @@ export class QQMusicProvider implements MusicProvider {
 
   async getAuthStatus(): Promise<AuthStatus> {
     if (!this.cookie) return { loggedIn: false };
+
+    // @sansenjian/qq-music-api does not expose a dedicated "am I logged in"
+    // endpoint. /user/getUserAvatar only builds a static avatar URL from a
+    // uin and never talks to QQ, so it cannot be used to validate a cookie.
+    // Instead, parse the uin from the cookie and round-trip it through
+    // /user/getUserPlaylists, which actually hits QQ Music's servers using
+    // the provided cookie. A successful response (code=0) means the cookie
+    // is still valid.
+    const uinMatch = this.cookie.match(/(?:^|;\s*)uin=([^;]+)/);
+    const uin = uinMatch?.[1];
+    if (!uin) return { loggedIn: false };
+
     try {
-      const res = await this.api.get("/getUserAvatar", {
-        params: { ...this.cookieParams },
+      const res = await this.api.get("/user/getUserPlaylists", {
+        params: { uin, limit: 1, ...this.cookieParams },
       });
-      if (res.data?.response?.data) {
-        return {
-          loggedIn: true,
-          nickname: res.data.response.data.nickname,
-          avatarUrl: res.data.response.data.headpic,
-        };
+      if (res.data?.response?.code !== 0) {
+        return { loggedIn: false };
       }
+      return {
+        loggedIn: true,
+        nickname: `QQ ${uin}`,
+        avatarUrl: `https://q.qlogo.cn/headimg_dl?dst_uin=${uin}&spec=140`,
+      };
     } catch {
-      // ignore
+      return { loggedIn: false };
     }
-    return { loggedIn: false };
   }
 }
