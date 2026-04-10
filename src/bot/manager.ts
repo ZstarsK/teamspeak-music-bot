@@ -12,6 +12,42 @@ import type { Logger } from "../logger.js";
 
 import type { ServerProtocol } from "../ts-protocol/client.js";
 
+/**
+ * Run bot.connect() with a hard deadline. If the handshake hangs (e.g. the
+ * server silently drops the connection after initivexpand2), we tear the
+ * instance down instead of waiting for the library's 60s idle timeout, so
+ * the HTTP /start call returns promptly and the UI doesn't lock up.
+ */
+async function connectWithTimeout(
+  bot: BotInstance,
+  ms: number,
+  logger: Logger
+): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`connect timeout after ${ms}ms`)),
+      ms
+    );
+  });
+  try {
+    await Promise.race([bot.connect(), timeout]);
+  } catch (err) {
+    logger.warn(
+      { err, botId: bot.id },
+      "Connect failed or timed out — tearing down instance"
+    );
+    try {
+      bot.disconnect();
+    } catch {
+      // ignore teardown errors
+    }
+    throw err;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 export interface CreateBotParams {
   name: string;
   serverAddress: string;
@@ -111,6 +147,7 @@ export class BotManager extends EventEmitter {
       this.bots.delete(id);
     }
     this.database.deleteBotInstance(id);
+    this.emit("botInstanceRemoved", id);
     this.logger.info({ botId: id }, "Bot instance removed");
   }
 
@@ -155,6 +192,18 @@ export class BotManager extends EventEmitter {
     const oldBot = this.bots.get(id);
     if (!oldBot) throw new Error(`Bot ${id} not found`);
 
+    // Always tear down the outgoing instance before creating a replacement.
+    // Covers three cases:
+    //   1. oldBot is fully connected (manual restart)
+    //   2. oldBot is mid-handshake from a prior rapid start (isConnected()
+    //      still returns false but the library client is live and will leak
+    //      a TS session if we abandon it)
+    //   3. oldBot was just created by createBot but never connected — the
+    //      disconnect call is a cheap no-op here.
+    // Calling disconnect() is idempotent (disconnectEmitted guards event
+    // emission), so this is safe in all states.
+    oldBot.disconnect();
+
     // Reload config from database so updated settings (channel, nickname, etc.) take effect
     const saved = this.database.getBotInstances().find((i) => i.id === id);
     if (saved) {
@@ -167,6 +216,10 @@ export class BotManager extends EventEmitter {
           port: saved.serverPort,
           queryPort: proto === "ts6" ? 10080 : 10011,
           nickname: saved.nickname,
+          // Reuse the stored identity so server groups assigned to this bot
+          // survive restarts — without this the TS server sees a new UID
+          // each connect and strips all previously granted groups.
+          identity: saved.identity || undefined,
           defaultChannel: saved.defaultChannel || undefined,
           channelPassword: saved.channelPassword || undefined,
           serverPassword: saved.serverPassword || undefined,
@@ -183,12 +236,12 @@ export class BotManager extends EventEmitter {
       });
       this.bots.set(id, bot);
       this.emit("botInstance", bot);
-      await bot.connect();
+      await connectWithTimeout(bot, 15_000, this.logger);
       // Mark as autoStart so it reconnects on Docker restart, and persist identity
       this.database.saveBotInstance({ ...saved, autoStart: true });
       this.persistBotIdentity(saved, bot);
     } else {
-      await oldBot.connect();
+      await connectWithTimeout(oldBot, 15_000, this.logger);
     }
   }
 

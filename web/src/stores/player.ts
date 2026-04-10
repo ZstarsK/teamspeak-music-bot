@@ -168,6 +168,14 @@ export const usePlayerStore = defineStore('player', {
       if (saved) this.theme = saved;
     },
 
+    async startBotInstance(id: string) {
+      await axios.post(`/api/bot/${id}/start`);
+    },
+
+    async stopBotInstance(id: string) {
+      await axios.post(`/api/bot/${id}/stop`);
+    },
+
     async fetchBots() {
       const res = await axios.get('/api/bot');
       this.bots = res.data.bots;

@@ -21,17 +21,54 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
 /** Resolve the yt-dlp binary path. Checks the project bin/ dir first, then PATH. */
 function findYtDlp(): string {
+  const exe = process.platform === "win32" ? "yt-dlp.exe" : "yt-dlp";
   const candidates = [
-    join(__dirname, "..", "..", "bin", "yt-dlp.exe"),
+    join(__dirname, "..", "..", "bin", exe),
     join(__dirname, "..", "..", "bin", "yt-dlp"),
-    "yt-dlp",
-    "yt-dlp.exe",
+    exe,
   ];
   for (const c of candidates) {
-    if (!c.includes(join("bin", "yt-dlp")) || existsSync(c)) return c;
-    // For PATH entries (no directory prefix), fall through to let execFile try
+    // Absolute/relative paths: only return if the file exists.
+    // Bare names: return and let execFile resolve via PATH.
+    const isBinPath = c.includes(join("bin", "yt-dlp"));
+    if (!isBinPath || existsSync(c)) return c;
   }
-  return "yt-dlp";
+  return exe;
+}
+
+/**
+ * Availability check for yt-dlp. Runs `yt-dlp --version` and caches only
+ * the positive result — if the binary is missing, subsequent calls retry
+ * so the user can install yt-dlp while the server is running and pick it
+ * up without a restart. Used by getAuthStatus() so the UI can reflect
+ * whether YouTube is actually usable.
+ */
+let cachedAvailable = false;
+let pendingCheck: Promise<boolean> | null = null;
+async function checkYtDlpAvailable(): Promise<boolean> {
+  if (cachedAvailable) return true;
+  if (pendingCheck) return pendingCheck;
+  pendingCheck = (async () => {
+    try {
+      await execFileAsync(findYtDlp(), ["--version"], {
+        timeout: 5_000,
+        maxBuffer: 1024,
+      });
+      cachedAvailable = true;
+      return true;
+    } catch {
+      return false;
+    } finally {
+      pendingCheck = null;
+    }
+  })();
+  return pendingCheck;
+}
+
+/** Force re-detection on the next call (for tests). */
+export function resetYtDlpAvailabilityCache(): void {
+  cachedAvailable = false;
+  pendingCheck = null;
 }
 
 async function runYtDlp(args: string[], timeoutMs = 30_000): Promise<string> {
@@ -179,6 +216,17 @@ export class YouTubeProvider implements MusicProvider {
   getCookie(): string { return ""; }
 
   async getAuthStatus(): Promise<AuthStatus> {
-    return { loggedIn: true, nickname: "YouTube (yt-dlp)" };
+    // YouTube has no login concept via yt-dlp, so "loggedIn" here means
+    // "yt-dlp binary is reachable and responds to --version". The UI can
+    // use this flag to grey out YouTube when the optional dependency is
+    // missing, instead of silently returning empty search results.
+    const available = await checkYtDlpAvailable();
+    if (available) {
+      return { loggedIn: true, nickname: "YouTube (yt-dlp)" };
+    }
+    return {
+      loggedIn: false,
+      nickname: "YouTube (yt-dlp not installed)",
+    };
   }
 }

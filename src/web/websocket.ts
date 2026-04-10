@@ -114,13 +114,32 @@ export function setupWebSocket(
   const onBotInstance = (bot: BotInstance) => attachBotListener(bot);
   botManager.on("botInstance", onBotInstance);
 
+  // React when a bot is removed: detach its listener and tell clients to drop it
+  const onBotInstanceRemoved = (id: string) => {
+    detachBotListener(id);
+    broadcast({ type: "botRemoved", botId: id });
+  };
+  botManager.on("botInstanceRemoved", onBotInstanceRemoved);
+
+  /** Drop attached listeners whose bot is no longer in the manager. */
+  function reconcileAttachedBots(): void {
+    const liveIds = new Set(botManager.getAllBots().map((b) => b.id));
+    for (const id of Array.from(attachedBots.keys())) {
+      if (!liveIds.has(id)) detachBotListener(id);
+    }
+  }
+
   // Safety net: periodically re-check in case any bot was missed
-  const intervalId = setInterval(ensureAllBotsAttached, 5000);
+  const intervalId = setInterval(() => {
+    reconcileAttachedBots();
+    ensureAllBotsAttached();
+  }, 5000);
   ensureAllBotsAttached();
 
   return () => {
     clearInterval(intervalId);
     botManager.removeListener("botInstance", onBotInstance);
+    botManager.removeListener("botInstanceRemoved", onBotInstanceRemoved);
     // Clean up all attached listeners (detach from stored bot refs, not live map)
     for (const id of Array.from(attachedBots.keys())) {
       detachBotListener(id);

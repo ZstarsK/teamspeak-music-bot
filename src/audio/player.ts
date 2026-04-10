@@ -302,6 +302,13 @@ export class AudioPlayer extends EventEmitter {
 
   seek(seconds: number): void {
     if (!this.currentUrl) return;
+    // Reject NaN/Infinity/negative — the HTTP layer validates too, but a
+    // bad value here would poison seekOffset and leave getElapsed()
+    // returning NaN until the track ends.
+    if (!Number.isFinite(seconds) || seconds < 0) {
+      this.logger.warn({ seek: seconds }, "Ignoring invalid seek position");
+      return;
+    }
     this.logger.info({ seek: seconds }, "Seeking");
     this.play(this.currentUrl, seconds);
   }

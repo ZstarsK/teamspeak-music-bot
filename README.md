@@ -5,7 +5,7 @@
 <h1 align="center">TSMusicBot</h1>
 
 <p align="center">
-  <strong>TeamSpeak 音乐机器人</strong> — 网易云音乐 + QQ 音乐 + 哔哩哔哩 三平台，YesPlayMusic 风格 WebUI 控制面板
+  <strong>TeamSpeak 音乐机器人</strong> — 网易云音乐 + QQ 音乐 + 哔哩哔哩 + YouTube（可选），YesPlayMusic 风格 WebUI 控制面板
 </p>
 
 <p align="center">
@@ -16,6 +16,7 @@
   <img src="https://img.shields.io/badge/FFmpeg-已内置-orange?logo=ffmpeg" />
   <img src="https://img.shields.io/badge/Docker-支持-2496ED?logo=docker&logoColor=white" />
   <img src="https://img.shields.io/badge/BiliBili-支持-00a1d6?logo=bilibili&logoColor=white" />
+  <img src="https://img.shields.io/badge/YouTube-可选-FF0000?logo=youtube&logoColor=white" />
   <img src="https://img.shields.io/badge/TS3-支持-2580C3?logo=teamspeak&logoColor=white" />
   <img src="https://img.shields.io/badge/TS6-支持-2580C3?logo=teamspeak&logoColor=white" />
 </p>
@@ -55,11 +56,19 @@
 - 修复 `TS6HttpQuery.request()` 双重 reject 问题
 - 添加重复 `connect()` 调用的保护（先断开旧连接）
 
+### YouTube 音源（可选）
+
+新增基于 `yt-dlp` 的 YouTube 音源，**默认未启用**。安装 `yt-dlp` 后可通过 `!play -y <关键词>` 或 WebUI 平台选项使用。详见 [可选：YouTube 音源](#可选youtube-音源) 章节的安装步骤。
+
+- `src/music/youtube.ts` — YouTubeProvider（通过 `yt-dlp --dump-json` 搜索、`--get-url` 取直链）
+- 未安装 `yt-dlp` 时搜索静默返回空结果，不影响其他音源
+- 服务器密码登录（`serverPassword` 字段）、Bot 选择器 UI 改进等特性见 git log
+
 ---
 
 ## 功能特性
 
-- **三平台音源** — 网易云音乐 + QQ 音乐 + 哔哩哔哩，统一搜索，结果标注来源
+- **多平台音源** — 网易云音乐 + QQ 音乐 + 哔哩哔哩（默认内置），YouTube 可选启用（通过 yt-dlp），统一搜索，结果标注来源
 - **真实客户端协议 (TS3/TS6 双协议)** — 机器人在 TeamSpeak 中可见（非 ServerQuery 隐身模式），自动检测并适配 TS3 和 TS6 服务器，支持 TS6 HTTP Query API
 - **YesPlayMusic 风格 WebUI** — 精美界面，支持深色/浅色主题切换
 - **完整播放控制** — 播放/暂停/上一首/下一首/进度跳转/音量调节
@@ -254,6 +263,7 @@ sudo systemctl start tsmusicbot
 | `!play <歌名>` | 搜索并播放 |
 | `!play -q <歌名>` | 从 QQ 音乐搜索 |
 | `!play -b <关键词>` | 从哔哩哔哩搜索视频并播放音频 |
+| `!play -y <关键词>` | 从 YouTube 搜索并播放（需要安装 [yt-dlp](#可选youtube-音源)）|
 | `!add <歌名>` | 添加到播放队列 |
 | `!pause` / `!resume` | 暂停 / 恢复播放 |
 | `!next` / `!prev` | 下一首 / 上一首 |
@@ -306,6 +316,7 @@ tsmusicbot/
 │   │   ├── netease.ts          # 网易云音乐适配器
 │   │   ├── qq.ts               # QQ 音乐适配器
 │   │   ├── bilibili.ts         # 哔哩哔哩适配器（视频音频提取）
+│   │   ├── youtube.ts          # YouTube 适配器（可选，依赖 yt-dlp）
 │   │   ├── auth.ts             # Cookie 持久化存储
 │   │   └── api-server.ts       # 嵌入式 API 服务（自动启动）
 │   ├── ts-protocol/            # TeamSpeak 客户端协议（TS3/TS6 双协议）
@@ -359,6 +370,55 @@ tsmusicbot/
 | **图标** | @iconify/vue |
 | **日志** | pino |
 
+## 可选：YouTube 音源
+
+YouTube 是**可选**的音源，默认**未启用**，需要安装 [yt-dlp](https://github.com/yt-dlp/yt-dlp) 才能使用。启用后可通过聊天命令 `!play -y <关键词>` 或 WebUI 的 YouTube 平台选项搜索/播放 YouTube 视频的音频流。
+
+### 启用方式（任选其一）
+
+**方式一：项目本地 `bin/` 目录（推荐）**
+
+将 `yt-dlp` 可执行文件放到项目根目录下的 `bin/` 文件夹，程序会优先使用此路径。该目录已被 `.gitignore` 忽略，不会影响代码更新。
+
+```bash
+# Windows（PowerShell 或 Git Bash）
+mkdir bin
+curl -L -o bin/yt-dlp.exe https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe
+
+# Linux / macOS
+mkdir -p bin
+curl -L -o bin/yt-dlp https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp
+chmod +x bin/yt-dlp
+```
+
+**方式二：系统级安装（让 `yt-dlp` 在 `PATH` 中可用）**
+
+```bash
+# Windows
+winget install yt-dlp
+
+# macOS
+brew install yt-dlp
+
+# Debian/Ubuntu
+sudo apt install yt-dlp
+
+# 通用（Python 环境下）
+pip install -U yt-dlp
+```
+
+### 验证是否可用
+
+重启机器人程序，在 WebUI 或 `!play -y lofi` 测试搜索。若 `bin/` 和 `PATH` 中都找不到 `yt-dlp`，YouTube 搜索会静默返回空结果（不会影响其他音源），其余功能正常。
+
+### 注意事项
+
+- YouTube 音源通过 `yt-dlp` 本地调用实现，不依赖 API Key，也无需登录
+- 播放的是视频的最佳音频流（`bestaudio[ext=webm]/bestaudio[ext=m4a]/bestaudio`），由 FFmpeg 解码
+- 音质由源视频决定，不受音质设置影响
+- 受 YouTube 风控/地域限制，部分视频可能无法播放
+- `yt-dlp` 更新较频繁，如果播放失败，先尝试升级 `yt-dlp` 到最新版本
+
 ## 配置文件
 
 `config.json` 在首次运行时自动生成，可手动编辑：
@@ -411,6 +471,9 @@ A：原生模块（opus、sqlite3）需要编译工具，Dockerfile 已包含。
 
 **Q：B站视频搜索不到结果？**
 A：B站搜索需要 buvid3 匿名 Cookie（程序启动时自动获取）。如果失败，重启程序即可。登录B站账号后搜索效果更好。
+
+**Q：YouTube 平台搜索返回空结果？**
+A：YouTube 是可选音源，需要手动安装 `yt-dlp`。详见 [可选：YouTube 音源](#可选youtube-音源) 章节。快速验证：在项目根目录执行 `bin/yt-dlp --version`（或系统 `yt-dlp --version`），能打印版本号即可。若 yt-dlp 已安装但仍搜索失败，通常是网络/地域问题或 yt-dlp 版本过旧（执行 `yt-dlp -U` 升级）。
 
 **Q：如何更新到新版本？**
 A：`git pull` 拉取最新代码，然后 `npm install && npm run build && npm start` 重新构建启动。Docker 用户执行 `docker-compose up -d --build`。

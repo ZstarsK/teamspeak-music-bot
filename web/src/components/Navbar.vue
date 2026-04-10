@@ -36,6 +36,15 @@
               <span v-else-if="bot.connected" class="bot-idle-badge">空闲</span>
               <span v-else class="bot-offline-badge">离线</span>
             </button>
+            <button
+              class="bot-power-btn"
+              :class="{ online: bot.connected }"
+              :title="bot.connected ? `停止 ${bot.name}` : `启动 ${bot.name}`"
+              :disabled="togglingBots[bot.id]"
+              @click.stop="togglePower(bot)"
+            >
+              <Icon :icon="bot.connected ? 'mdi:power' : 'mdi:power-off'" />
+            </button>
             <button class="bot-link-btn" :title="`复制 ${bot.name} 的专属链接`" @click.stop="copyBotLink(bot.id)">
               <Icon icon="mdi:link-variant" />
             </button>
@@ -61,6 +70,7 @@ const store = usePlayerStore();
 const activeBot = computed(() => store.activeBot);
 const dropdownOpen = ref(false);
 const selectorRef = ref<HTMLElement | null>(null);
+const togglingBots = ref<Record<string, boolean>>({});
 
 function selectBot(id: string) {
   store.setActiveBotId(id);
@@ -72,6 +82,22 @@ function copyBotLink(id: string) {
   navigator.clipboard.writeText(url).then(() => {
     dropdownOpen.value = false;
   });
+}
+
+async function togglePower(bot: { id: string; connected: boolean; name: string }) {
+  if (togglingBots.value[bot.id]) return;
+  togglingBots.value[bot.id] = true;
+  try {
+    if (bot.connected) {
+      await store.stopBotInstance(bot.id);
+    } else {
+      await store.startBotInstance(bot.id);
+    }
+  } catch (err) {
+    console.error(`Failed to toggle bot ${bot.name}`, err);
+  } finally {
+    togglingBots.value[bot.id] = false;
+  }
 }
 
 function onClickOutside(e: MouseEvent) {
@@ -271,6 +297,32 @@ onUnmounted(() => {
   &:hover {
     opacity: 1;
     background: var(--hover-bg);
+  }
+}
+
+.bot-power-btn {
+  flex-shrink: 0;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  font-size: 16px;
+  opacity: 0.5;
+  color: var(--text-tertiary);
+  transition: opacity var(--transition-fast), background var(--transition-fast), color var(--transition-fast);
+  cursor: pointer;
+
+  &:hover:not(:disabled) {
+    opacity: 1;
+    background: var(--hover-bg);
+  }
+
+  &:disabled {
+    opacity: 0.25;
+    cursor: wait;
+  }
+
+  &.online {
+    color: #22c55e;
+    opacity: 0.9;
   }
 }
 

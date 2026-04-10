@@ -25,6 +25,14 @@ export function createPlayerRouter(
     next();
   });
 
+  /** Map API platform string to the corresponding command flag. */
+  const platformFlag = (platform: unknown): string => {
+    if (platform === "bilibili") return "-b";
+    if (platform === "qq") return "-q";
+    if (platform === "youtube") return "-y";
+    return "";
+  };
+
   router.post("/:botId/play", async (req, res) => {
     try {
       const bot = (req as any).bot;
@@ -33,8 +41,7 @@ export function createPlayerRouter(
         res.status(400).json({ error: "query is required" });
         return;
       }
-      const flags = platform === "bilibili" ? "-b" : platform === "qq" ? "-q" : "";
-      const cmd = parseCommand(`!play ${flags} ${query}`.trim(), "!");
+      const cmd = parseCommand(`!play ${platformFlag(platform)} ${query}`.trim(), "!");
       if (!cmd) {
         res.status(400).json({ error: "Invalid command" });
         return;
@@ -50,8 +57,7 @@ export function createPlayerRouter(
     try {
       const bot = (req as any).bot;
       const { query, platform } = req.body;
-      const flags = platform === "bilibili" ? "-b" : platform === "qq" ? "-q" : "";
-      const cmd = parseCommand(`!add ${flags} ${query}`.trim(), "!");
+      const cmd = parseCommand(`!add ${platformFlag(platform)} ${query}`.trim(), "!");
       if (!cmd) {
         res.status(400).json({ error: "Invalid command" });
         return;
@@ -85,7 +91,21 @@ export function createPlayerRouter(
     try {
       const bot = (req as any).bot;
       const { volume } = req.body;
-      const cmd = parseCommand(`!vol ${volume}`, "!")!;
+      // Reject bad input with a proper 4xx instead of letting cmdVol
+      // return a "Usage:" string inside a 200 body — API clients can't
+      // detect that failure mode, and the UI would silently swallow it.
+      if (
+        typeof volume !== "number" ||
+        !Number.isFinite(volume) ||
+        volume < 0 ||
+        volume > 100
+      ) {
+        res
+          .status(400)
+          .json({ error: "volume must be a number between 0 and 100" });
+        return;
+      }
+      const cmd = parseCommand(`!vol ${Math.round(volume)}`, "!")!;
       const response = await bot.executeCommand(cmd);
       res.json({ message: response });
     } catch (err) {
@@ -93,10 +113,18 @@ export function createPlayerRouter(
     }
   });
 
+  const VALID_MODES = new Set(["seq", "loop", "random", "rloop"]);
+
   router.post("/:botId/mode", async (req, res) => {
     try {
       const bot = (req as any).bot;
       const { mode } = req.body;
+      if (typeof mode !== "string" || !VALID_MODES.has(mode)) {
+        res
+          .status(400)
+          .json({ error: "mode must be one of: seq, loop, random, rloop" });
+        return;
+      }
       const cmd = parseCommand(`!mode ${mode}`, "!")!;
       const response = await bot.executeCommand(cmd);
       res.json({ message: response });
@@ -116,8 +144,12 @@ export function createPlayerRouter(
     try {
       const bot = (req as any).bot;
       const { position } = req.body; // seconds
-      if (typeof position !== "number" || position < 0) {
-        res.status(400).json({ error: "position (seconds) is required" });
+      // typeof NaN === "number" and NaN < 0 is false, so a plain range
+      // check lets NaN/Infinity through and later corrupts seekOffset.
+      if (typeof position !== "number" || !Number.isFinite(position) || position < 0) {
+        res
+          .status(400)
+          .json({ error: "position must be a finite non-negative number" });
         return;
       }
       bot.getPlayer().seek(position);
@@ -153,8 +185,15 @@ export function createPlayerRouter(
         return;
       }
       const queue = bot.getQueueManager();
-      bot.getPlayer().stop(); // Stop current playback first
-      bot.getPlayer().resetFailures(); // Reset on user-initiated play
+      // Validate the index BEFORE stopping current playback — otherwise an
+      // invalid index silently kills the user's current song and leaves the
+      // queue idle.
+      if (index >= queue.size()) {
+        res.status(400).json({ error: "Invalid queue index" });
+        return;
+      }
+      bot.getPlayer().stop();
+      bot.getPlayer().resetFailures();
       const song = queue.playAt(index);
       if (!song) {
         res.status(400).json({ error: "Invalid queue index" });
@@ -175,9 +214,8 @@ export function createPlayerRouter(
     try {
       const bot = (req as any).bot;
       const { playlistId, platform } = req.body;
-      const flags = platform === "bilibili" ? "-b" : platform === "qq" ? "-q" : "";
       const cmd = parseCommand(
-        `!playlist ${flags} ${playlistId}`.trim(),
+        `!playlist ${platformFlag(platform)} ${playlistId}`.trim(),
         "!"
       )!;
       const response = await bot.executeCommand(cmd);
@@ -193,11 +231,13 @@ export function createPlayerRouter(
     try {
       const bot = (req as any).bot;
       const { playlistId, platform } = req.body;
-      const provider = platform === "bilibili" ? bilibiliProvider : platform === "qq" ? qqProvider : neteaseProvider;
-      if (!provider) {
-        res.status(500).json({ error: "Provider not available" });
-        return;
-      }
+      // Use the bot's own provider lookup — it already knows about youtube,
+      // which the router's constructor params did not.
+      const provider = bot.getProviderFor(
+        platform === "bilibili" || platform === "qq" || platform === "youtube"
+          ? platform
+          : "netease"
+      );
 
       // Stop current playback
       bot.getPlayer().stop();
@@ -241,11 +281,11 @@ export function createPlayerRouter(
     try {
       const bot = (req as any).bot;
       const { songId, platform } = req.body;
-      const provider = platform === "bilibili" ? bilibiliProvider : platform === "qq" ? qqProvider : neteaseProvider;
-      if (!provider) {
-        res.status(500).json({ error: "Provider not available" });
-        return;
-      }
+      const provider = bot.getProviderFor(
+        platform === "bilibili" || platform === "qq" || platform === "youtube"
+          ? platform
+          : "netease"
+      );
 
       const song = await provider.getSongDetail(songId);
       if (!song) {
@@ -276,11 +316,11 @@ export function createPlayerRouter(
     try {
       const bot = (req as any).bot;
       const { songId, platform } = req.body;
-      const provider = platform === "bilibili" ? bilibiliProvider : platform === "qq" ? qqProvider : neteaseProvider;
-      if (!provider) {
-        res.status(500).json({ error: "Provider not available" });
-        return;
-      }
+      const provider = bot.getProviderFor(
+        platform === "bilibili" || platform === "qq" || platform === "youtube"
+          ? platform
+          : "netease"
+      );
 
       const song = await provider.getSongDetail(songId);
       if (!song) {

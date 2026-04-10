@@ -1,5 +1,6 @@
 import { Router } from "express";
 import type { MusicProvider } from "../../music/provider.js";
+import { YouTubeProvider } from "../../music/youtube.js";
 import type { CookieStore } from "../../music/auth.js";
 import type { Logger } from "../../logger.js";
 
@@ -11,9 +12,13 @@ export function createAuthRouter(
   cookieStore?: CookieStore
 ): Router {
   const router = Router();
+  // YouTube is auth-less; we only use this instance so /auth/status can
+  // report whether yt-dlp is actually installed (loggedIn=false otherwise).
+  const youtubeProvider: MusicProvider = new YouTubeProvider();
 
   function getProvider(platform?: string): MusicProvider {
     if (platform === "bilibili") return bilibiliProvider;
+    if (platform === "youtube") return youtubeProvider;
     return platform === "qq" ? qqProvider : neteaseProvider;
   }
 
@@ -117,6 +122,14 @@ export function createAuthRouter(
     const { platform, cookie } = req.body;
     if (!cookie) {
       res.status(400).json({ error: "cookie is required" });
+      return;
+    }
+    // YouTube has no cookie concept — reject instead of falling through and
+    // clobbering the NetEase cookie entry.
+    if (platform === "youtube") {
+      res
+        .status(400)
+        .json({ error: "YouTube does not use cookies (uses yt-dlp binary)" });
       return;
     }
     const provider = getProvider(platform);

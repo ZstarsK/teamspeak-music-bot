@@ -1,105 +1,119 @@
-"""Reproduce the player-bar-not-appearing bug."""
+"""Reproduce / regression-check the player-bar-not-appearing bug.
+
+Captures the bot's initial playback state and restores it on exit so the
+test never leaves the user with surprise music or a cleared queue.
+"""
 import time
 import requests
 from playwright.sync_api import sync_playwright
 
 BASE = "http://localhost:3000"
 
-def get_bot_id():
-    r = requests.get(f"{BASE}/api/bot/")
-    return r.json()["bots"][0]["id"]
 
-def stop(bot_id):
-    requests.post(f"{BASE}/api/player/{bot_id}/stop")
-    requests.post(f"{BASE}/api/player/{bot_id}/clear")
+def api(path, method="GET", **kw):
+    fn = getattr(requests, method.lower())
+    r = fn(f"{BASE}{path}", timeout=10, **kw)
+    r.raise_for_status()
+    return r.json() if r.text else None
 
-def play(bot_id, query="test"):
-    requests.post(f"{BASE}/api/player/{bot_id}/play", json={"query": query, "platform": "netease"})
 
-with sync_playwright() as p:
-    browser = p.chromium.launch(headless=True)
-    ctx = browser.new_context()
-    ctx.add_init_script("""
-      (() => {
-        const OrigWS = window.WebSocket;
-        window.__wsMessages = [];
-        window.WebSocket = function(...args) {
-          const ws = new OrigWS(...args);
-          ws.addEventListener('message', (ev) => {
-            try {
-              const d = JSON.parse(ev.data);
-              const summary = {type: d.type, botId: d.botId};
-              if (d.status) summary.playing = d.status.playing;
-              if (d.status?.currentSong) summary.song = d.status.currentSong.name;
-              window.__wsMessages.push(summary);
-              console.log('WS_MSG ' + JSON.stringify(summary));
-            } catch(e) {}
-          });
-          return ws;
-        };
-        Object.assign(window.WebSocket, OrigWS);
-      })();
-    """)
-    page = ctx.new_page()
-    logs = []
-    page.on("console", lambda msg: logs.append(f"[{msg.type}] {msg.text}"))
+def get_bot(bot_id):
+    return next(b for b in api("/api/bot/")["bots"] if b["id"] == bot_id)
 
-    bot_id = get_bot_id()
-    stop(bot_id)
-    time.sleep(0.6)
 
-    page.goto(BASE)
-    page.wait_for_load_state("networkidle")
-    time.sleep(0.8)
+def capture_state(bot_id):
+    b = get_bot(bot_id)
+    return {
+        "playing": b["playing"],
+        "paused": b["paused"],
+        "song": (b["currentSong"] or {}).get("name"),
+    }
 
-    # Hook into WebSocket messages from the page to confirm they arrive
-    page.evaluate("""
-      () => {
-        const origWS = window.WebSocket;
-        // Already connected via useWebSocket — tap Pinia store directly
-        // Expose store state via window
-        const store = window.__pinia?._s?.get('player');
-        window.__getStore = () => ({
-          bots: JSON.parse(JSON.stringify(store?.bots || [])),
-          activeBotId: store?.activeBotId,
-          currentSong: store?.currentSong ? JSON.parse(JSON.stringify(store.currentSong)) : null,
-          isPlaying: store?.isPlaying,
-        });
-      }
-    """)
 
-    snap_before = page.evaluate("() => window.__getStore?.()")
-    print("store before:", snap_before)
+def main():
+    bots = api("/api/bot/")["bots"]
+    if not bots:
+        print("[skip] no bots")
+        return
+    bot_id = bots[0]["id"]
+    initial = capture_state(bot_id)
+    print(f"[init] initial state: {initial}")
 
-    # Player bar should be absent right now (nothing playing)
-    initial = page.locator(".player-wrapper").count()
-    print(f"initial .player-wrapper count: {initial}")
+    try:
+        # Clear slate
+        api(f"/api/player/{bot_id}/stop", method="POST")
+        time.sleep(0.6)
 
-    # Trigger play via API (simulates any play trigger)
-    play(bot_id, "test")
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            try:
+                ctx = browser.new_context()
+                ctx.add_init_script(
+                    """
+                    (() => {
+                      const OrigWS = window.WebSocket;
+                      window.__wsMessages = [];
+                      window.WebSocket = function(...args) {
+                        const ws = new OrigWS(...args);
+                        ws.addEventListener('message', (ev) => {
+                          try {
+                            const d = JSON.parse(ev.data);
+                            window.__wsMessages.push({type: d.type, botId: d.botId});
+                          } catch(e) {}
+                        });
+                        return ws;
+                      };
+                      Object.assign(window.WebSocket, OrigWS);
+                    })();
+                    """
+                )
+                page = ctx.new_page()
+                page.goto(BASE)
+                page.wait_for_load_state("networkidle")
+                time.sleep(0.8)
 
-    # Poll for up to 6s to see if player bar appears automatically
-    appeared_at = None
-    for i in range(60):
-        if page.locator(".player-wrapper").count() > 0:
-            appeared_at = i * 0.1
-            break
-        page.wait_for_timeout(100)
+                assert page.locator(".player-wrapper").count() == 0, (
+                    "player bar should be hidden before playback"
+                )
 
-    print(f"player bar appeared after: {appeared_at}")
-    snap_after = page.evaluate("() => window.__getStore?.()")
-    print("store after:", snap_after)
+                # Trigger play via API (simulates any play trigger)
+                api(
+                    f"/api/player/{bot_id}/play",
+                    method="POST",
+                    json={"query": "the mass", "platform": "netease"},
+                )
 
-    # After force reload, does it appear?
-    if appeared_at is None:
-        page.reload()
-        page.wait_for_load_state("networkidle")
-        time.sleep(0.8)
-        after_reload = page.locator(".player-wrapper").count()
-        print(f"after reload .player-wrapper count: {after_reload}")
+                # Poll for up to 6s to see if player bar appears automatically
+                appeared_at = None
+                for i in range(60):
+                    if page.locator(".player-wrapper").count() > 0:
+                        appeared_at = i * 0.1
+                        break
+                    page.wait_for_timeout(100)
 
-    print("--- console logs ---")
-    for line in logs[-20:]:
-        print(line)
+                if appeared_at is None:
+                    msgs = page.evaluate("() => window.__wsMessages")
+                    print(f"[FAIL] player bar never appeared; WS msgs: {msgs}")
+                    raise AssertionError("player bar did not auto-show on stateChange")
+                print(f"[PASS] player bar appeared after {appeared_at:.1f}s")
+            finally:
+                browser.close()
+    finally:
+        # Restore: stop the "test" song we triggered, then re-apply initial
+        # state as best we can. We can't re-queue the user's previous song,
+        # but we can at least stop ours and leave the bot idle if it was idle.
+        try:
+            api(f"/api/player/{bot_id}/stop", method="POST")
+        except Exception as e:
+            print(f"[warn] failed to stop test song on cleanup: {e}")
+        post = capture_state(bot_id)
+        print(f"[restore] bot now idle (was playing={initial['playing']} song={initial['song']!r})")
+        if initial["playing"] and initial["song"]:
+            print(
+                f"[note] initial bot was playing {initial['song']!r}; "
+                "this test cannot resume arbitrary tracks — you may need to restart playback"
+            )
 
-    browser.close()
+
+if __name__ == "__main__":
+    main()

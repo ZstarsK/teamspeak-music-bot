@@ -89,6 +89,49 @@ describe("PlayQueue", () => {
     expect(queue.list()[1].id).toBe("3");
   });
 
+  it("removing a song before current shifts current index", () => {
+    queue.setMode(PlayMode.Sequential);
+    queue.add(makeSong("A"));
+    queue.add(makeSong("B"));
+    queue.add(makeSong("C"));
+    queue.playAt(2); // playing C at index 2
+    queue.remove(0); // remove A (before current)
+    expect(queue.current()?.id).toBe("C"); // still on C
+    expect(queue.getCurrentIndex()).toBe(1);
+  });
+
+  it("removing the currently-playing song lets next() advance to the shifted song", () => {
+    queue.setMode(PlayMode.Sequential);
+    queue.add(makeSong("A"));
+    queue.add(makeSong("B"));
+    queue.add(makeSong("C"));
+    queue.add(makeSong("D"));
+    queue.playAt(2); // playing C
+    queue.remove(2); // remove C — D shifts into slot 2
+    // Before the fix this returned null (D was silently skipped)
+    expect(queue.next()?.id).toBe("D");
+  });
+
+  it("removing the only song clears the queue", () => {
+    queue.add(makeSong("only"));
+    queue.playAt(0);
+    queue.remove(0);
+    expect(queue.size()).toBe(0);
+    expect(queue.current()).toBeNull();
+    expect(queue.next()).toBeNull();
+  });
+
+  it("removing the last song while playing it advances to null in sequential mode", () => {
+    queue.setMode(PlayMode.Sequential);
+    queue.add(makeSong("A"));
+    queue.add(makeSong("B"));
+    queue.playAt(1); // playing B (last)
+    queue.remove(1);
+    expect(queue.size()).toBe(1);
+    // currentIndex moved to 0, so next() should try to advance past the end
+    expect(queue.next()).toBeNull();
+  });
+
   it("clears all songs", () => {
     queue.add(makeSong("1"));
     queue.add(makeSong("2"));

@@ -56,6 +56,13 @@ export function useWebSocket() {
             }
           }
           break;
+        case 'botRemoved':
+          // Bot was deleted from the server — drop from local state entirely
+          store.removeBotStatus(data.botId);
+          if (store.activeBotId === data.botId) {
+            store.activeBotId = store.bots[0]?.id ?? null;
+          }
+          break;
       }
     };
 

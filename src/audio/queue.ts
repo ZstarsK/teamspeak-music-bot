@@ -36,9 +36,14 @@ export class PlayQueue {
     if (index < this.currentIndex) {
       this.currentIndex--;
     } else if (index === this.currentIndex) {
-      if (this.currentIndex >= this.songs.length) {
-        this.currentIndex = this.songs.length - 1;
-      }
+      // Move the pointer back by one so next() in sequential mode advances
+      // to the song that shifted into the removed slot. Without this, the
+      // shifted song is silently skipped because current() incorrectly
+      // returns it (even though the player is still on the removed song)
+      // and next() then increments past it. currentIndex may become -1,
+      // which is fine — it represents "no current song" and next() will
+      // pick index 0.
+      this.currentIndex--;
     }
 
     return removed;
