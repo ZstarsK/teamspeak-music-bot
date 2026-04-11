@@ -32,6 +32,7 @@ export function createApiServerManager(
   logger: Logger
 ): ApiServerManager {
   let neteaseServer: Server | null = null;
+  let qqMusicServer: Server | null = null;
 
   const neteaseBaseUrl = `http://127.0.0.1:${options.neteasePort}`;
   const qqMusicBaseUrl = `http://127.0.0.1:${options.qqMusicPort}`;
@@ -62,7 +63,10 @@ export function createApiServerManager(
         logger.error({ err }, "Failed to start NetEase Cloud Music API");
       }
 
-      // Start QQ Music API (auto-starts on import)
+      // Start QQ Music API. Older versions auto-started on import; the
+      // current fork (2.2.11+) only listens when run as `require.main`,
+      // so we explicitly call .listen() on the imported Koa app and keep
+      // the server handle for clean shutdown.
       try {
         const portFree = await isPortFree(options.qqMusicPort);
         if (!portFree) {
@@ -71,11 +75,22 @@ export function createApiServerManager(
             "QQ Music API port already in use — reusing existing instance"
           );
         } else {
-          await import("@sansenjian/qq-music-api");
-          logger.info(
-            { port: options.qqMusicPort },
-            "QQ Music API started"
-          );
+          const qqModule = (await import("@sansenjian/qq-music-api")) as any;
+          const koaApp = qqModule.default ?? qqModule;
+          if (koaApp && typeof koaApp.listen === "function") {
+            qqMusicServer = await new Promise<Server>((resolve, reject) => {
+              const srv = koaApp.listen(options.qqMusicPort, "127.0.0.1", () =>
+                resolve(srv)
+              );
+              srv.on("error", reject);
+            });
+            logger.info(
+              { port: options.qqMusicPort },
+              "QQ Music API started"
+            );
+          } else {
+            logger.warn("QQ Music API module does not expose a Koa app");
+          }
         }
       } catch (err) {
         logger.warn(
@@ -91,6 +106,10 @@ export function createApiServerManager(
         (neteaseServer as any).close();
       }
       neteaseServer = null;
+      if (qqMusicServer && typeof (qqMusicServer as any).close === "function") {
+        (qqMusicServer as any).close();
+      }
+      qqMusicServer = null;
     },
 
     getNeteaseBaseUrl(): string {
