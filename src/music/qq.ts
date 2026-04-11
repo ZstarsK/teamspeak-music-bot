@@ -66,7 +66,12 @@ export class QQMusicProvider implements MusicProvider {
   }
 
   async getSongDetail(songId: string): Promise<Song | null> {
-    // getSongInfo requires cookie; use search as fallback
+    // Try /getSongInfo for full metadata, but fall through to a minimal
+    // stub if the library endpoint fails (current @sansenjian/qq-music-api
+    // returns upstream code 500001 for this route — the param format it
+    // sends doesn't match QQ's current API). The bot's resolveAndPlay path
+    // only needs `id` and `platform` to fetch a play URL, and the fallback
+    // stub is sufficient to let /play-by-id and /add-by-id flows succeed.
     try {
       const res = await this.api.get("/getSongInfo", {
         params: { songmid: songId, ...this.cookieParams },
@@ -87,9 +92,20 @@ export class QQMusicProvider implements MusicProvider {
         };
       }
     } catch {
-      // fallback: search by songmid (less reliable)
+      // fall through to stub
     }
-    return null;
+    // Minimal stub — resolveAndPlay only needs id + platform to fetch a
+    // play URL. Name/artist/album will be empty in play history, but the
+    // song will actually play, which is the important part.
+    return {
+      id: songId,
+      name: "",
+      artist: "",
+      album: "",
+      duration: 0,
+      coverUrl: "",
+      platform: "qq",
+    };
   }
 
   async getPlaylistSongs(playlistId: string): Promise<Song[]> {
@@ -215,23 +231,25 @@ export class QQMusicProvider implements MusicProvider {
     // the main router; the real endpoint is /user/getUserAvatar, and even
     // that just builds a static URL from a uin without validating the
     // cookie against QQ. Round-trip through /user/getUserPlaylists which
-    // actually hits QQ Music with the cookie; if we get playlists back,
-    // the cookie is valid. Derive nickname/avatar from the uin parsed out
-    // of the cookie.
+    // actually hits QQ Music with the cookie; if the upstream returns
+    // code=0, the cookie is valid.
+    //
+    // IMPORTANT: /user/getUserPlaylists requires `uin` as a query param —
+    // the library 400s with "缺少 uin 参数" otherwise. Parse it out of the
+    // cookie (uin=<qq>; comes after the various *uin prefixed names, which
+    // is why the regex anchors on a word boundary).
+    const uinMatch = /(?:^|; )uin=o?0?(\d+)/.exec(this.cookie);
+    const uin = uinMatch ? uinMatch[1] : "";
+    if (!uin) return { loggedIn: false };
     try {
-      const uinMatch = /\buin=o?0?(\d+)/.exec(this.cookie);
-      const uin = uinMatch ? uinMatch[1] : "";
       const res = await this.api.get("/user/getUserPlaylists", {
-        params: { ...this.cookieParams },
+        params: { uin, ...this.cookieParams },
       });
-      const ok = res.data?.response?.data || res.data?.data;
-      if (!ok) return { loggedIn: false };
+      if (res.data?.response?.code !== 0) return { loggedIn: false };
       return {
         loggedIn: true,
-        nickname: uin ? `QQ ${uin}` : "QQ Music",
-        avatarUrl: uin
-          ? `https://q.qlogo.cn/headimg_dl?dst_uin=${uin}&spec=100`
-          : undefined,
+        nickname: `QQ ${uin}`,
+        avatarUrl: `https://q.qlogo.cn/headimg_dl?dst_uin=${uin}&spec=100`,
       };
     } catch {
       return { loggedIn: false };
