@@ -33,6 +33,24 @@ export interface BotInstance {
   identity?: string;
 }
 
+export interface ProfileConfig {
+  avatarEnabled: boolean;
+  descriptionEnabled: boolean;
+  nicknameEnabled: boolean;
+  awayStatusEnabled: boolean;
+  channelDescEnabled: boolean;
+  nowPlayingMsgEnabled: boolean;
+}
+
+export const DEFAULT_PROFILE_CONFIG: ProfileConfig = {
+  avatarEnabled: true,
+  descriptionEnabled: true,
+  nicknameEnabled: true,
+  awayStatusEnabled: true,
+  channelDescEnabled: true,
+  nowPlayingMsgEnabled: true,
+};
+
 export interface BotDatabase {
   db: Database.Database;
   addPlayHistory(entry: PlayHistoryEntry): void;
@@ -40,6 +58,8 @@ export interface BotDatabase {
   saveBotInstance(instance: BotInstance): void;
   getBotInstances(): BotInstance[];
   deleteBotInstance(id: string): boolean;
+  getProfileConfig(botId: string): ProfileConfig;
+  saveProfileConfig(botId: string, config: ProfileConfig): void;
   close(): void;
 }
 
@@ -57,6 +77,20 @@ function migrateSchema(db: Database.Database): void {
   }
   if (!names.includes("serverPassword")) {
     db.exec("ALTER TABLE bot_instances ADD COLUMN serverPassword TEXT NOT NULL DEFAULT ''");
+  }
+  // Profile feature flags
+  const profileCols = [
+    "profile_avatar_enabled",
+    "profile_description_enabled",
+    "profile_nickname_enabled",
+    "profile_away_enabled",
+    "profile_channel_desc_enabled",
+    "profile_now_playing_enabled",
+  ];
+  for (const col of profileCols) {
+    if (!names.includes(col)) {
+      db.exec(`ALTER TABLE bot_instances ADD COLUMN ${col} INTEGER NOT NULL DEFAULT 1`);
+    }
   }
 }
 
@@ -127,6 +161,24 @@ export function createDatabase(dbPath: string): BotDatabase {
 
   const deleteInstance = db.prepare(`DELETE FROM bot_instances WHERE id = ?`);
 
+  const selectProfileConfig = db.prepare(`
+    SELECT profile_avatar_enabled, profile_description_enabled,
+           profile_nickname_enabled, profile_away_enabled,
+           profile_channel_desc_enabled, profile_now_playing_enabled
+    FROM bot_instances WHERE id = ?
+  `);
+
+  const updateProfileConfig = db.prepare(`
+    UPDATE bot_instances SET
+      profile_avatar_enabled = @avatar,
+      profile_description_enabled = @description,
+      profile_nickname_enabled = @nickname,
+      profile_away_enabled = @away,
+      profile_channel_desc_enabled = @channelDesc,
+      profile_now_playing_enabled = @nowPlaying
+    WHERE id = @id
+  `);
+
   return {
     db,
 
@@ -163,6 +215,31 @@ export function createDatabase(dbPath: string): BotDatabase {
     deleteBotInstance(id) {
       const result = deleteInstance.run(id);
       return result.changes > 0;
+    },
+
+    getProfileConfig(botId) {
+      const row = selectProfileConfig.get(botId) as Record<string, number> | undefined;
+      if (!row) return { ...DEFAULT_PROFILE_CONFIG };
+      return {
+        avatarEnabled: row.profile_avatar_enabled === 1,
+        descriptionEnabled: row.profile_description_enabled === 1,
+        nicknameEnabled: row.profile_nickname_enabled === 1,
+        awayStatusEnabled: row.profile_away_enabled === 1,
+        channelDescEnabled: row.profile_channel_desc_enabled === 1,
+        nowPlayingMsgEnabled: row.profile_now_playing_enabled === 1,
+      };
+    },
+
+    saveProfileConfig(botId, config) {
+      updateProfileConfig.run({
+        id: botId,
+        avatar: config.avatarEnabled ? 1 : 0,
+        description: config.descriptionEnabled ? 1 : 0,
+        nickname: config.nicknameEnabled ? 1 : 0,
+        away: config.awayStatusEnabled ? 1 : 0,
+        channelDesc: config.channelDescEnabled ? 1 : 0,
+        nowPlaying: config.nowPlayingMsgEnabled ? 1 : 0,
+      });
     },
 
     close() {

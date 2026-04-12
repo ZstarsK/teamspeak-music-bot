@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import { Readable } from "node:stream";
 import {
   Client as TS3FullClient,
   generateIdentity as genTS3Identity,
@@ -7,9 +8,11 @@ import {
   listChannels,
   listClients,
   clientMove,
+  fileTransferDeleteFile,
   type Identity,
   type TextMessage,
   type ClientInfo,
+  type FileUploadInfo,
 } from "@honeybbq/teamspeak-client";
 import type { Logger } from "../logger.js";
 import {
@@ -20,6 +23,19 @@ import { TS6HttpQuery } from "./http-query.js";
 
 export { CODEC_OPUS_MUSIC } from "./voice.js";
 export type { ServerProtocol } from "./protocol-detect.js";
+export type { FileUploadInfo } from "@honeybbq/teamspeak-client";
+
+/** Escape a string for use in TS3 ServerQuery-style commands. */
+export function escapeTS3(str: string): string {
+  return str
+    .replace(/\\/g, "\\\\")
+    .replace(/ /g, "\\s")
+    .replace(/\//g, "\\/")
+    .replace(/\|/g, "\\p")
+    .replace(/\t/g, "\\t")
+    .replace(/\n/g, "\\n")
+    .replace(/\r/g, "\\r");
+}
 
 export interface TS3ClientOptions {
   host: string;
@@ -276,6 +292,56 @@ export class TS3Client extends EventEmitter {
     } catch {
       return [];
     }
+  }
+
+  // --- Raw command & file transfer pass-through ---
+
+  async execCommand(cmd: string): Promise<void> {
+    if (!this.client) throw new Error("Not connected");
+    await this.client.execCommand(cmd);
+  }
+
+  /** Fire a command without waiting for the server's response. */
+  async sendCommandNoWait(cmd: string): Promise<void> {
+    if (!this.client) throw new Error("Not connected");
+    await this.client.sendCommandNoWait(cmd);
+  }
+
+  async execCommandWithResponse(cmd: string): Promise<Record<string, string>[]> {
+    if (!this.client) throw new Error("Not connected");
+    return this.client.execCommandWithResponse(cmd);
+  }
+
+  async fileTransferInitUpload(
+    channelID: bigint,
+    path: string,
+    password: string,
+    size: bigint,
+    overwrite = true,
+  ): Promise<FileUploadInfo> {
+    if (!this.client) throw new Error("Not connected");
+    return this.client.fileTransferInitUpload(channelID, path, password, size, overwrite);
+  }
+
+  async uploadFileData(host: string, info: FileUploadInfo, data: Readable): Promise<void> {
+    if (!this.client) throw new Error("Not connected");
+    await this.client.uploadFileData(host, info, data);
+  }
+
+  async fileTransferDeleteFile(channelID: bigint, paths: string[]): Promise<void> {
+    if (!this.client) throw new Error("Not connected");
+    await fileTransferDeleteFile(this.client, channelID, paths);
+  }
+
+  /** The server host (needed for file transfer TCP connections). */
+  getHost(): string {
+    return this.options.host;
+  }
+
+  /** The current channel ID of this client. */
+  getChannelId(): bigint {
+    if (!this.client) return 0n;
+    return this.client.channelID();
   }
 
   private voiceFramesSent = 0;

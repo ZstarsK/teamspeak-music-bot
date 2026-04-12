@@ -343,6 +343,27 @@ export function createPlayerRouter(
     }
   });
 
+  // --- Profile config endpoints ---
+
+  router.get("/:botId/profile", (req, res) => {
+    const bot = (req as any).bot;
+    res.json(bot.getProfileManager().getConfig());
+  });
+
+  router.put("/:botId/profile", (req, res) => {
+    try {
+      const bot = (req as any).bot;
+      const pm = bot.getProfileManager();
+      pm.updateConfig(req.body);
+      if (database) {
+        database.saveProfileConfig(bot.id, pm.getConfig());
+      }
+      res.json(pm.getConfig());
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
   router.get("/:botId/history", (req, res) => {
     if (!database) {
       res.json({ history: [] });

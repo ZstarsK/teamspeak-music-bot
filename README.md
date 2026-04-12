@@ -34,6 +34,7 @@
 - **B站视频音频提取** — 搜索B站视频，自动提取DASH最高码率音频流播放
 - **B站热门推荐** — 首页展示B站热门视频和个性化推荐（登录后更准确）
 - **QR码登录** — 扫码登录网易云/QQ音乐/哔哩哔哩账号，Cookie 自动持久化
+- **机器人形象自动更新** — 播放时自动更新头像（专辑封面）、昵称（当前歌曲）、描述、Away 状态、频道描述，停止时恢复默认值。每项功能独立可配置，权限不足时自动降级
 - **多机器人独立播放** — 多个机器人同时在不同服务器或频道播放不同音乐，每个机器人独立的播放队列、进度和音量，WebUI 一键切换控制
 - **播放历史** — 自动记录所有播放过的歌曲
 - **懒加载机制** — 歌单只存储元数据，播放时才获取链接（避免链接过期）
@@ -289,7 +290,8 @@ teamspeak-music-bot/
 │   ├── bot/                    # 机器人核心
 │   │   ├── commands.ts         # 文字命令解析器（前缀、别名、权限）
 │   │   ├── instance.ts         # Bot 实例（绑定 TS3 + 播放器 + 音源）
-│   │   └── manager.ts          # 多实例生命周期管理
+│   │   ├── manager.ts          # 多实例生命周期管理
+│   │   └── profile.ts          # 机器人形象管理（头像/昵称/描述/Away/频道描述）
 │   ├── data/                   # 数据层
 │   │   ├── config.ts           # JSON 配置文件
 │   │   └── database.ts         # SQLite 数据库（播放历史、实例持久化）
@@ -473,6 +475,15 @@ A：`git pull` 拉取最新代码，然后 `npm install && npm run build && npm 
 > 完整历史请查看 [git log](https://github.com/ZHANGTIANYAO1/teamspeak-music-bot/commits/main) 或 [Releases](https://github.com/ZHANGTIANYAO1/teamspeak-music-bot/releases)。这里只列出重要变更和面向用户的破坏性改动。
 
 ### 最新版本
+
+**机器人形象自动更新（Bot Profile）**
+
+- **播放时自动更新 TS 形象**：头像（专辑封面缩略图）、昵称（`♪ 歌名 - 歌手 - 原昵称`）、描述（歌曲信息）、Away 状态、频道描述、"正在播放"频道消息，全部随歌曲切换自动更新。
+- **停止播放时恢复默认**：头像清除、昵称恢复、Away 显示"等待播放"、描述和频道描述清空。
+- **权限安全**：每项功能独立检测权限，权限不足时自动禁用该功能（不影响其他功能和播放），重连后重试。
+- **独立可配置**：6 项功能可通过 REST API（`GET/PUT /api/player/:botId/profile`）独立开关，配置持久化到数据库。
+- **竞争条件防护**：generation 计数器防止快速切歌时旧头像覆盖新头像；UTF-8 字节长度截断中文昵称；文件传输操作带超时保护。
+- **TS3 适配**：描述通过 `clientedit`（非 `clientupdate`）设置，需要 `b_client_modify_description` 权限；昵称和 Away 通过合并的单条 `clientupdate` 避免命令队列超时。
 
 **协议层 & 稳定性**
 

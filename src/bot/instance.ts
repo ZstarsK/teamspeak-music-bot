@@ -13,8 +13,9 @@ import {
   type ParsedCommand,
 } from "./commands.js";
 import type { Logger } from "../logger.js";
-import type { BotDatabase } from "../data/database.js";
+import type { BotDatabase, ProfileConfig } from "../data/database.js";
 import type { BotConfig } from "../data/config.js";
+import { BotProfileManager } from "./profile.js";
 
 export interface BotInstanceOptions {
   id: string;
@@ -60,6 +61,7 @@ export class BotInstance extends EventEmitter {
   private disconnectEmitted = false;
   private voteSkipUsers = new Set<string>();
   private isAdvancing = false;
+  private profileManager: BotProfileManager;
 
   constructor(options: BotInstanceOptions) {
     super();
@@ -76,6 +78,14 @@ export class BotInstance extends EventEmitter {
     this.tsClient = new TS3Client(options.tsOptions, this.logger);
     this.player = new AudioPlayer(this.logger);
     this.queue = new PlayQueue();
+
+    const profileConfig = this.database.getProfileConfig(this.id);
+    this.profileManager = new BotProfileManager(
+      this.tsClient,
+      this.logger,
+      profileConfig,
+      options.tsOptions.nickname,
+    );
 
     this.setupPlayerEvents();
     this.setupTsEvents();
@@ -134,6 +144,7 @@ export class BotInstance extends EventEmitter {
       throw new Error("Connect aborted by concurrent disconnect");
     }
     this.connected = true;
+    this.profileManager.onConnect();
     this.emit("connected");
   }
 
@@ -306,6 +317,10 @@ export class BotInstance extends EventEmitter {
         platform: song.platform,
         coverUrl: song.coverUrl,
       });
+      // Update bot presence (fire-and-forget — never blocks playback)
+      this.profileManager.onSongChange(song).catch((err) => {
+        this.logger.warn({ err }, "Profile update failed after song change");
+      });
       this.emit("stateChange");
       return true;
     } catch (err) {
@@ -374,6 +389,9 @@ export class BotInstance extends EventEmitter {
   private cmdStop(): string {
     this.player.stop();
     this.queue.clear();
+    this.profileManager.onSongChange(null).catch((err) => {
+      this.logger.warn({ err }, "Profile restore failed on stop");
+    });
     this.emit("stateChange");
     return "Stopped and queue cleared";
   }
@@ -424,6 +442,9 @@ export class BotInstance extends EventEmitter {
   private cmdClear(): string {
     this.player.stop();
     this.queue.clear();
+    this.profileManager.onSongChange(null).catch((err) => {
+      this.logger.warn({ err }, "Profile restore failed on clear");
+    });
     this.emit("stateChange");
     return "Queue cleared";
   }
@@ -590,9 +611,11 @@ export class BotInstance extends EventEmitter {
         }
         if (!started) {
           this.player.stop();
+          this.profileManager.onSongChange(null).catch(() => {});
         }
       } else {
         this.player.stop();
+        this.profileManager.onSongChange(null).catch(() => {});
       }
       this.emit("stateChange");
     } finally {
@@ -637,6 +660,10 @@ export class BotInstance extends EventEmitter {
 
   isConnected(): boolean {
     return this.connected;
+  }
+
+  getProfileManager(): BotProfileManager {
+    return this.profileManager;
   }
 
   getIdentityExport(): string | undefined {
