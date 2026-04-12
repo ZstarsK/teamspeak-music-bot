@@ -65,8 +65,8 @@ FFmpeg **已自动内置**，无需手动安装。
 
 ```bash
 # 下载项目
-git clone https://github.com/ZHANGTIANYAO1/tsmusicbot.git
-cd tsmusicbot
+git clone https://github.com/ZHANGTIANYAO1/teamspeak-music-bot.git
+cd teamspeak-music-bot
 
 # 安装依赖
 npm install
@@ -86,8 +86,8 @@ npm start
 所有依赖已内置（Node.js、FFmpeg、Opus 编码器），无需安装任何额外软件。
 
 ```bash
-git clone https://github.com/ZHANGTIANYAO1/tsmusicbot.git
-cd tsmusicbot/scripts/docker
+git clone https://github.com/ZHANGTIANYAO1/teamspeak-music-bot.git
+cd teamspeak-music-bot/scripts/docker
 docker-compose up -d
 ```
 
@@ -279,7 +279,7 @@ sudo systemctl start tsmusicbot
 ## 项目架构
 
 ```
-tsmusicbot/
+teamspeak-music-bot/
 ├── src/                        # 后端源码 (TypeScript)
 │   ├── audio/                  # 音频管线：FFmpeg → PCM → Opus → 20ms 帧
 │   │   ├── encoder.ts          # Opus 编码器 (@discordjs/opus)
