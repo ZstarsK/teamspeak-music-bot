@@ -76,7 +76,14 @@ export function createApiServerManager(
           );
         } else {
           const qqModule = (await import("@sansenjian/qq-music-api")) as any;
-          const koaApp = qqModule.default ?? qqModule;
+          // The module's export structure varies between versions:
+          //   2.2.11+: default → Koa app (has .listen)
+          //   2.2.10:  default → wrapper object whose .default is the Koa app
+          //   older:   module itself may be the Koa app
+          const candidate = qqModule.default ?? qqModule;
+          const koaApp = typeof candidate.listen === "function"
+            ? candidate
+            : candidate.default ?? null;
           if (koaApp && typeof koaApp.listen === "function") {
             qqMusicServer = await new Promise<Server>((resolve, reject) => {
               const srv = koaApp.listen(options.qqMusicPort, "127.0.0.1", () =>

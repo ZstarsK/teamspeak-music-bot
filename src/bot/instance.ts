@@ -61,11 +61,9 @@ export class BotInstance extends EventEmitter {
   private disconnectEmitted = false;
   private voteSkipUsers = new Set<string>();
   private isAdvancing = false;
-<<<<<<< HEAD
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
   private channelUserCount = 0;
   private profileManager: BotProfileManager;
->>>>>>> origin/main
 
   constructor(options: BotInstanceOptions) {
     super();
