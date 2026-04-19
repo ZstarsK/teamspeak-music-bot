@@ -36,31 +36,43 @@ export class QQMusicProvider implements MusicProvider {
     return this.cookie ? { cookie: this.cookie } : {};
   }
 
+  private mapSong(s: any): Song {
+    const id = String(s.songmid ?? s.mid ?? s.songMid ?? s.id ?? s.songid ?? "");
+    const albumMid = s.albummid ?? s.album?.mid ?? s.album?.pmid ?? "";
+    const mediaId = s.strMediaMid ?? s.media_mid ?? s.file?.media_mid ?? s.file?.mediaMid ?? "";
+    return {
+      id,
+      name: s.songname ?? s.name ?? s.title ?? "",
+      artist: (s.singer ?? []).map((a: any) => a.name ?? a.title).filter(Boolean).join(" / "),
+      album: s.albumname ?? s.album?.name ?? s.album?.title ?? "",
+      duration: s.interval ?? 0,
+      coverUrl: albumMid
+        ? `https://y.gtimg.cn/music/photo_new/T002R300x300M000${albumMid}.jpg`
+        : "",
+      platform: "qq",
+      ...(mediaId ? { mediaId: String(mediaId) } : {}),
+    };
+  }
+
   async search(query: string, limit = 20): Promise<SearchResult> {
     const res = await this.api.get("/getSearchByKey", {
       params: { key: query, pageSize: limit, ...this.cookieParams },
     });
 
-    const songs: Song[] = (res.data?.response?.data?.song?.list ?? []).map(
-      (s: any) => ({
-        id: String(s.songmid ?? s.songid),
-        name: s.songname ?? "",
-        artist: (s.singer ?? []).map((a: any) => a.name).join(" / "),
-        album: s.albumname ?? "",
-        duration: s.interval ?? 0,
-        coverUrl: s.albummid
-          ? `https://y.gtimg.cn/music/photo_new/T002R300x300M000${s.albummid}.jpg`
-          : "",
-        platform: "qq",
-      })
-    );
+    const songs: Song[] = (res.data?.response?.data?.song?.list ?? [])
+      .map((s: any) => this.mapSong(s))
+      .filter((s: Song) => s.id);
 
     return { songs, playlists: [], albums: [] };
   }
 
-  async getSongUrl(songId: string, _quality?: string): Promise<string | null> {
+  async getSongUrl(songId: string, _quality?: string, song?: Song): Promise<string | null> {
     const res = await this.api.get("/getMusicPlay", {
-      params: { songmid: songId, ...this.cookieParams },
+      params: {
+        songmid: songId,
+        ...(song?.mediaId ? { mediaId: song.mediaId } : {}),
+        ...this.cookieParams,
+      },
     });
     const playUrl = res.data?.data?.playUrl?.[songId];
     return playUrl?.url || null;
@@ -79,18 +91,7 @@ export class QQMusicProvider implements MusicProvider {
       });
       const s = res.data?.response?.data;
       if (s && s.track_info) {
-        const t = s.track_info;
-        return {
-          id: String(t.mid ?? t.id),
-          name: t.name ?? "",
-          artist: (t.singer ?? []).map((a: any) => a.name).join(" / "),
-          album: t.album?.name ?? "",
-          duration: t.interval ?? 0,
-          coverUrl: t.album?.mid
-            ? `https://y.gtimg.cn/music/photo_new/T002R300x300M000${t.album.mid}.jpg`
-            : "",
-          platform: "qq",
-        };
+        return this.mapSong(s.track_info);
       }
     } catch {
       // fall through to stub
@@ -118,7 +119,7 @@ export class QQMusicProvider implements MusicProvider {
     if (!p) return null;
 
     return {
-      id: String(p.dissid ?? p.disstid ?? playlistId),
+      id: String(p.disstid ?? p.dissid ?? playlistId),
       name: p.dissname ?? p.title ?? "",
       description: p.desc ?? p.dissdesc ?? p.description ?? "",
       coverUrl: p.logo ?? p.picurl ?? p.cover_url ?? "",
@@ -140,17 +141,9 @@ export class QQMusicProvider implements MusicProvider {
     });
     const cdlist = res.data?.response?.cdlist ?? [];
     if (cdlist.length === 0) return [];
-    return (cdlist[0].songlist ?? []).map((s: any) => ({
-      id: String(s.songmid ?? s.songid),
-      name: s.songname ?? s.name ?? "",
-      artist: (s.singer ?? []).map((a: any) => a.name).join(" / "),
-      album: s.albumname ?? "",
-      duration: s.interval ?? 0,
-      coverUrl: s.albummid
-        ? `https://y.gtimg.cn/music/photo_new/T002R300x300M000${s.albummid}.jpg`
-        : "",
-      platform: "qq",
-    }));
+    return (cdlist[0].songlist ?? [])
+      .map((s: any) => this.mapSong(s))
+      .filter((s: Song) => s.id);
   }
 
   async getRecommendPlaylists(): Promise<Playlist[]> {
@@ -170,17 +163,9 @@ export class QQMusicProvider implements MusicProvider {
     const res = await this.api.get("/getAlbumInfo", {
       params: { albummid: albumId, ...this.cookieParams },
     });
-    return (res.data?.response?.data?.list ?? []).map((s: any) => ({
-      id: String(s.songmid ?? s.songid),
-      name: s.songname ?? "",
-      artist: (s.singer ?? []).map((a: any) => a.name).join(" / "),
-      album: s.albumname ?? "",
-      duration: s.interval ?? 0,
-      coverUrl: s.albummid
-        ? `https://y.gtimg.cn/music/photo_new/T002R300x300M000${s.albummid}.jpg`
-        : "",
-      platform: "qq",
-    }));
+    return (res.data?.response?.data?.list ?? [])
+      .map((s: any) => this.mapSong(s))
+      .filter((s: Song) => s.id);
   }
 
   async getLyrics(songId: string): Promise<LyricLine[]> {

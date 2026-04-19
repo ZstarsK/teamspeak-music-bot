@@ -81,12 +81,14 @@ export interface PlayerEvents {
 export type PlayerState = "idle" | "playing" | "paused";
 
 const FRAME_DURATION_MS = 20;
+const MAX_VOLUME = 20;
+const DEFAULT_VOLUME = 8;
 
 export class AudioPlayer extends EventEmitter {
   private ffmpeg: ChildProcess | null = null;
   private encoder: Encoder;
   private state: PlayerState = "idle";
-  private volume = 75;
+  private volume = DEFAULT_VOLUME;
   private pcmBuffer: Buffer = Buffer.alloc(0);
   private logger: Logger;
   private frameLoopRunning = false;
@@ -365,7 +367,7 @@ export class AudioPlayer extends EventEmitter {
   }
 
   setVolume(vol: number): void {
-    this.volume = Math.max(0, Math.min(100, vol));
+    this.volume = Math.max(0, Math.min(MAX_VOLUME, vol));
   }
 
   getVolume(): number {

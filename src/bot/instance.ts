@@ -13,6 +13,8 @@ import {
   type ParsedCommand,
 } from "./commands.js";
 import type { Logger } from "../logger.js";
+
+const MAX_VOLUME = 20;
 import type { BotDatabase, ProfileConfig } from "../data/database.js";
 import type { BotConfig } from "../data/config.js";
 import { BotProfileManager } from "./profile.js";
@@ -338,7 +340,7 @@ export class BotInstance extends EventEmitter {
     this.voteSkipUsers.clear();
     const provider = this.getProviderFor(song.platform);
     try {
-      const url = await provider.getSongUrl(song.id);
+      const url = await provider.getSongUrl(song.id, undefined, song);
       if (!url) {
         this.logger.warn({ songId: song.id, name: song.name }, "No URL available, skipping");
         return false;
@@ -465,7 +467,7 @@ export class BotInstance extends EventEmitter {
 
   private cmdVol(cmd: ParsedCommand): string {
     const vol = parseInt(cmd.args, 10);
-    if (isNaN(vol) || vol < 0 || vol > 100) return "Usage: !vol <0-100>";
+    if (isNaN(vol) || vol < 0 || vol > MAX_VOLUME) return `Usage: !vol <0-${MAX_VOLUME}>`;
     this.player.setVolume(vol);
     this.emit("stateChange");
     return `Volume set to ${vol}%`;
@@ -626,7 +628,7 @@ export class BotInstance extends EventEmitter {
       `${p}pause/resume — Pause/resume`,
       `${p}next/prev    — Next/previous`,
       `${p}stop         — Stop and clear queue`,
-      `${p}vol <0-100>  — Set volume`,
+      `${p}vol <0-${MAX_VOLUME}>  — Set volume`,
       `${p}queue        — Show queue`,
       `${p}mode <seq|loop|random|rloop> — Play mode`,
       `${p}playlist <id> — Load playlist`,

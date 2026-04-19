@@ -12,6 +12,7 @@ export interface QueuedSong {
   album: string;
   platform: "netease" | "qq" | "bilibili" | "youtube";
   url?: string; // resolved lazily at play time
+  mediaId?: string;
   coverUrl: string;
   duration: number; // seconds
 }

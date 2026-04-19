@@ -297,20 +297,15 @@ export class BotProfileManager {
    * not characters.
    */
   private buildNickname(song: QueuedSong): string | null {
-    const songInfo = `${song.name} - ${song.artist}`;
+    const songInfo = song.name.trim();
     const prefix = "\u266A "; // ♪
-    const sep = " - ";
-    const suffix = `${sep}${this.defaultNickname}`;
-
-    const overheadBytes = Buffer.byteLength(prefix, "utf8") + Buffer.byteLength(suffix, "utf8");
-    if (overheadBytes >= TS3_NICKNAME_MAX) {
-      // Default nickname alone is too long with decoration — skip
+    if (!songInfo) {
       return null;
     }
 
-    const maxSongBytes = TS3_NICKNAME_MAX - overheadBytes;
+    const maxSongBytes = TS3_NICKNAME_MAX - Buffer.byteLength(prefix, "utf8");
     const truncated = this.truncateUtf8(songInfo, maxSongBytes);
-    return `${prefix}${truncated}${suffix}`;
+    return `${prefix}${truncated}`;
   }
 
   /**

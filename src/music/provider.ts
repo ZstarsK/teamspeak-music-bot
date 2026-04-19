@@ -15,6 +15,7 @@ export interface Song {
   duration: number; // seconds
   coverUrl: string;
   platform: MusicPlatform;
+  mediaId?: string;
 }
 
 export interface SongWithUrl extends Song {
@@ -71,7 +72,7 @@ export interface MusicProvider {
   readonly platform: MusicPlatform;
 
   search(query: string, limit?: number): Promise<SearchResult>;
-  getSongUrl(songId: string, quality?: string): Promise<string | null>;
+  getSongUrl(songId: string, quality?: string, song?: Song): Promise<string | null>;
   setQuality(quality: string): void;
   getQuality(): string;
   getSongDetail(songId: string): Promise<Song | null>;

@@ -30,7 +30,7 @@ import { Icon } from '@iconify/vue';
 import CoverArt from './CoverArt.vue';
 
 defineProps<{
-  song: { id: string; name: string; artist: string; album: string; duration: number; coverUrl: string; platform: string };
+  song: { id: string; name: string; artist: string; album: string; duration: number; coverUrl: string; platform: string; mediaId?: string };
   index: number;
   active?: boolean;
 }>();

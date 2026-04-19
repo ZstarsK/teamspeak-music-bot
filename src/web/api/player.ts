@@ -14,6 +14,7 @@ export function createPlayerRouter(
   bilibiliProvider?: MusicProvider,
 ): Router {
   const router = Router();
+  const MAX_VOLUME = 20;
 
   router.use("/:botId", (req, res, next) => {
     const bot = botManager.getBot(req.params.botId);
@@ -98,11 +99,11 @@ export function createPlayerRouter(
         typeof volume !== "number" ||
         !Number.isFinite(volume) ||
         volume < 0 ||
-        volume > 100
+        volume > MAX_VOLUME
       ) {
         res
           .status(400)
-          .json({ error: "volume must be a number between 0 and 100" });
+          .json({ error: `volume must be a number between 0 and ${MAX_VOLUME}` });
         return;
       }
       const cmd = parseCommand(`!vol ${Math.round(volume)}`, "!")!;
@@ -114,6 +115,32 @@ export function createPlayerRouter(
   });
 
   const VALID_MODES = new Set(["seq", "loop", "random", "rloop"]);
+
+  const isValidSongId = (songId: unknown): songId is string =>
+    typeof songId === "string" &&
+    songId.trim().length > 0 &&
+    songId !== "undefined" &&
+    songId !== "null";
+
+  const songFromRequest = (
+    raw: any,
+    songId: string,
+    platform: MusicProvider["platform"]
+  ) => {
+    if (!raw || typeof raw !== "object" || typeof raw.name !== "string") {
+      return null;
+    }
+    return {
+      id: songId,
+      name: raw.name,
+      artist: typeof raw.artist === "string" ? raw.artist : "",
+      album: typeof raw.album === "string" ? raw.album : "",
+      duration: typeof raw.duration === "number" && Number.isFinite(raw.duration) ? raw.duration : 0,
+      coverUrl: typeof raw.coverUrl === "string" ? raw.coverUrl : "",
+      platform,
+      ...(typeof raw.mediaId === "string" && raw.mediaId ? { mediaId: raw.mediaId } : {}),
+    };
+  };
 
   router.post("/:botId/mode", async (req, res) => {
     try {
@@ -280,14 +307,19 @@ export function createPlayerRouter(
   router.post("/:botId/play-by-id", async (req, res) => {
     try {
       const bot = (req as any).bot;
-      const { songId, platform } = req.body;
+      const { songId, platform, song: rawSong } = req.body;
+      if (!isValidSongId(songId)) {
+        res.status(400).json({ error: "songId is required" });
+        return;
+      }
       const provider = bot.getProviderFor(
         platform === "bilibili" || platform === "qq" || platform === "youtube"
           ? platform
           : "netease"
       );
 
-      const song = await provider.getSongDetail(songId);
+      const song = songFromRequest(rawSong, songId, provider.platform)
+        ?? await provider.getSongDetail(songId);
       if (!song) {
         res.json({ message: "Song not found" });
         return;
@@ -301,7 +333,7 @@ export function createPlayerRouter(
       bot.getPlayer().resetFailures();
       const ok = await bot.resolveAndPlay(queue.current()!);
       if (!ok) {
-        res.json({ message: `Cannot play: ${song.name}` });
+        res.json({ message: `Cannot play: ${song.name || song.id}` });
         return;
       }
 
@@ -315,14 +347,19 @@ export function createPlayerRouter(
   router.post("/:botId/add-by-id", async (req, res) => {
     try {
       const bot = (req as any).bot;
-      const { songId, platform } = req.body;
+      const { songId, platform, song: rawSong } = req.body;
+      if (!isValidSongId(songId)) {
+        res.status(400).json({ error: "songId is required" });
+        return;
+      }
       const provider = bot.getProviderFor(
         platform === "bilibili" || platform === "qq" || platform === "youtube"
           ? platform
           : "netease"
       );
 
-      const song = await provider.getSongDetail(songId);
+      const song = songFromRequest(rawSong, songId, provider.platform)
+        ?? await provider.getSongDetail(songId);
       if (!song) {
         res.json({ message: "Song not found" });
         return;

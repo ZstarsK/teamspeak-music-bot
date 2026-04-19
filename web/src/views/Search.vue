@@ -27,8 +27,8 @@
         :song="song"
         :index="i + 1"
         :active="store.currentSong?.id === song.id"
-        @play="store.playById(song.id, song.platform)"
-        @add="store.addToQueueById(song.id, song.platform)"
+        @play="store.playById(song.id, song.platform, song)"
+        @add="store.addToQueueById(song.id, song.platform, song)"
       />
     </div>
 
@@ -50,7 +50,7 @@ const store = usePlayerStore();
 const route = useRoute();
 
 const query = ref((route.query.q as string) || '');
-const results = ref<Array<{ id: string; name: string; artist: string; album: string; duration: number; coverUrl: string; platform: string }>>([]);
+const results = ref<Array<{ id: string; name: string; artist: string; album: string; duration: number; coverUrl: string; platform: 'netease' | 'qq' | 'bilibili' | 'youtube'; mediaId?: string }>>([]);
 const loading = ref(false);
 const searched = ref(false);
 

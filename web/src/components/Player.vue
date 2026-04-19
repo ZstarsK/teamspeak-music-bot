@@ -58,8 +58,8 @@
         <input
           type="range"
           min="0"
-          max="100"
-          :value="activeBot?.volume ?? 75"
+          max="20"
+          :value="activeBot?.volume ?? 8"
           @change="onVolumeChange"
           class="volume-slider"
         />
