@@ -1,6 +1,7 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { OggSyncGate } from "../audio/ogg-sync-gate.js";
 import { PcmGate } from "../audio/pcm-gate.js";
 import type { AudioPlayer } from "../audio/player.js";
 import {
@@ -191,7 +192,9 @@ export class SpotifyPlaybackEngine {
   private currentOutputMode: "pcm" | "encoded" = "pcm";
   private transitionInFlight = false;
   private pcmGate: PcmGate | null = null;
+  private encodedGate: OggSyncGate | null = null;
   private recentEvents: SpotifyLibrespotEvent[] = [];
+  private playbackCommandId = 0;
 
   constructor(
     private provider: SpotifyProvider,
@@ -214,6 +217,7 @@ export class SpotifyPlaybackEngine {
   async play(song: Song, player: AudioPlayer, onEnd: () => void | Promise<void>): Promise<void> {
     const account = await this.provider.getPlaybackAccount(song.accountId);
     const trackUri = this.provider.getTrackUri(song.id);
+    this.playbackCommandId += 1;
     const playerState = player.getState();
     let sameProcess = Boolean(this.librespot && !this.librespot.killed && this.activeAccountId === account.id);
     await this.ensureProcess(account, onEnd);
@@ -224,34 +228,21 @@ export class SpotifyPlaybackEngine {
       outputMode: this.currentOutputMode,
     }) && this.streamAttached && this.attachedPlayer === player;
 
-    if (!reusingStream && sameProcess && this.currentOutputMode === "encoded") {
-      this.logger.info(
-        { deviceId: this.activeDeviceId, trackUri: this.activeTrackUri, playerState },
-        "Restarting Spotify passthrough sidecar before attaching a fresh FFmpeg reader",
-      );
-      this.shutdown();
-      await this.ensureProcess(account, onEnd);
-      deviceId = await this.waitForDeviceWithPassthroughFallback(account, onEnd);
-      sameProcess = false;
-      reusingStream = false;
-    }
-
     const pcmReusingStream = reusingStream && this.currentOutputMode === "pcm";
-    if (!reusingStream) {
+    const encodedStream = this.currentOutputMode === "encoded";
+    if (encodedStream) {
+      if (sameProcess) {
+        this.prepareEncodedBoundary(player);
+      }
+      this.attachPlayerToStream(player);
+      reusingStream = false;
+    } else if (!reusingStream) {
       this.attachPlayerToStream(player);
     } else if (pcmReusingStream) {
       this.logger.info(
         { deviceId: this.activeDeviceId, fromTrackUri: this.activeTrackUri, toTrackUri: trackUri, playerState },
         "Reusing existing Spotify PCM stream",
       );
-    } else {
-      this.logger.info(
-        { deviceId: this.activeDeviceId, trackUri: this.activeTrackUri, playerState },
-        "Reusing existing Spotify encoded stream",
-      );
-      if (playerState === "paused") {
-        player.resume();
-      }
     }
     this.activeAccountId = account.id;
     this.activeDeviceId = deviceId;
@@ -284,6 +275,15 @@ export class SpotifyPlaybackEngine {
           this.restartPcmPlayerForTransition(player);
           await this.releasePcmBoundary(player, 0);
         });
+      } else if (encodedStream) {
+        await this.withTransition(async () => {
+          await this.provider.startPlayback({
+            accountId: account.id,
+            deviceId,
+            trackUri,
+          });
+          this.playbackStarted = true;
+        });
       } else {
         await this.provider.startPlayback({
           accountId: account.id,
@@ -296,6 +296,7 @@ export class SpotifyPlaybackEngine {
       const shouldPauseSpotify = this.playbackStarted;
       this.playbackStarted = false;
       this.beginPcmGateDiscard("spotify-playback-failed");
+      this.beginEncodedGateDiscard("spotify-playback-failed");
       if (shouldPauseSpotify) {
         try {
           await this.pause();
@@ -377,6 +378,7 @@ export class SpotifyPlaybackEngine {
       this.watcher = null;
     }
     this.destroyPcmGate();
+    this.destroyEncodedGate();
     if (this.librespot) {
       this.librespot.kill("SIGTERM");
       this.librespot = null;
@@ -504,6 +506,7 @@ export class SpotifyPlaybackEngine {
     this.attachedPlayer = null;
     this.streamAttached = false;
     this.destroyPcmGate();
+    this.destroyEncodedGate();
 
     child.stderr?.on("data", (chunk: Buffer) => {
       const message = chunk.toString().trimEnd();
@@ -518,6 +521,7 @@ export class SpotifyPlaybackEngine {
       this.logger.warn({ code, signal }, "librespot sidecar closed");
       if (this.librespot === child) {
         this.destroyPcmGate();
+        this.destroyEncodedGate();
         this.librespot = null;
         this.activeDeviceId = null;
         this.attachedPlayer = null;
@@ -607,37 +611,118 @@ export class SpotifyPlaybackEngine {
   }
 
   private attachPlayerToStream(player: AudioPlayer): void {
-    const stream = this.librespot?.stdout;
-    if (!stream) {
-      throw new Error("librespot stdout is not available");
-    }
     const cleanup = this.createPlaybackCleanup();
     if (this.currentOutputMode === "encoded") {
       this.destroyPcmGate();
-      player.playEncodedStream(stream, {
-        inputFormat: "ogg",
-        cleanup,
-      });
+      this.startEncodedPlayer(player, cleanup);
+      return;
     } else {
+      this.destroyEncodedGate();
       this.startPcmPlayer(player, cleanup);
       return;
     }
-    this.attachedPlayer = player;
-    this.streamAttached = true;
   }
 
   private createPlaybackCleanup(): () => void {
+    const cleanupCommandId = this.playbackCommandId;
+    const cleanupTrackUri = this.activeTrackUri;
     return () => {
       this.attachedPlayer = null;
       this.streamAttached = false;
       if (this.currentOutputMode === "pcm") {
         this.destroyPcmGate();
+      } else {
+        this.beginEncodedGateDiscard("playback-cleanup");
       }
       if (!this.playbackStarted) return;
-      this.pause().catch((err) => {
-        this.logger.warn({ err }, "Failed to pause Spotify playback during cleanup");
-      });
+      Promise.resolve()
+        .then(() => sleep(120))
+        .then(() => {
+          if (
+            this.playbackCommandId !== cleanupCommandId ||
+            this.transitionInFlight ||
+            this.activeTrackUri !== cleanupTrackUri
+          ) {
+            this.logger.debug(
+              { cleanupTrackUri, activeTrackUri: this.activeTrackUri },
+              "Skipping stale Spotify pause during playback cleanup",
+            );
+            return undefined;
+          }
+          return this.pause();
+        })
+        .catch((err) => {
+          this.logger.warn({ err }, "Failed to pause Spotify playback during cleanup");
+        });
     };
+  }
+
+  private ensureEncodedGate(): OggSyncGate {
+    if (this.encodedGate) {
+      return this.encodedGate;
+    }
+    const stream = this.librespot?.stdout;
+    if (!stream) {
+      throw new Error("librespot stdout is not available");
+    }
+    this.destroyPcmGate();
+    const gate = new OggSyncGate();
+    gate.on("error", (err) => {
+      this.logger.warn({ err }, "Spotify encoded gate error");
+    });
+    stream.once("error", (err) => {
+      this.logger.warn({ err }, "librespot stdout error");
+    });
+    stream.pipe(gate);
+    this.encodedGate = gate;
+    this.logger.info({ gateStats: gate.getStats() }, "Attached Spotify encoded Ogg gate");
+    return gate;
+  }
+
+  private startEncodedPlayer(player: AudioPlayer, cleanup = this.createPlaybackCleanup()): void {
+    const gate = this.ensureEncodedGate();
+    gate.syncToNextLogicalStream("spotify-encoded-start");
+    this.logger.info({ gateStats: gate.getStats() }, "Spotify encoded gate waiting for next Ogg stream");
+    player.playEncodedStream(gate, {
+      inputFormat: "ogg",
+      cleanup,
+    });
+    this.attachedPlayer = player;
+    this.streamAttached = true;
+  }
+
+  private prepareEncodedBoundary(player: AudioPlayer): void {
+    const gate = this.ensureEncodedGate();
+    gate.syncToNextLogicalStream("spotify-encoded-transition");
+    player.stop({ skipCleanup: true });
+    this.attachedPlayer = null;
+    this.streamAttached = false;
+    this.logger.info(
+      { gateStats: gate.getStats(), activeTrackUri: this.activeTrackUri },
+      "Prepared encoded Ogg boundary for Spotify transition",
+    );
+  }
+
+  private beginEncodedGateDiscard(reason: string): boolean {
+    if (!this.encodedGate) {
+      return false;
+    }
+    this.encodedGate.beginDiscard(reason);
+    this.logger.info({ reason, gateStats: this.encodedGate.getStats() }, "Spotify encoded gate discarding input");
+    return true;
+  }
+
+  private destroyEncodedGate(): void {
+    if (!this.encodedGate) {
+      return;
+    }
+    try {
+      this.librespot?.stdout?.unpipe(this.encodedGate);
+    } catch (err) {
+      this.logger.debug({ err }, "Failed to unpipe Spotify encoded gate");
+    }
+    this.encodedGate.destroy();
+    this.encodedGate = null;
   }
 
   private ensurePcmGate(): PcmGate {
@@ -648,6 +733,7 @@ export class SpotifyPlaybackEngine {
     if (!stream) {
       throw new Error("librespot stdout is not available");
     }
+    this.destroyEncodedGate();
     const gate = new PcmGate();
     gate.on("error", (err) => {
       this.logger.warn({ err }, "Spotify PCM gate error");

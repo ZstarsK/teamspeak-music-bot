@@ -90,6 +90,8 @@ const FRAME_DURATION_MS = 20;
 const DEFAULT_VOLUME = 8;
 const DUCKING_FADE_OUT_MS = 160;
 const PCM_SAMPLE_BLOCK_BYTES = 4; // 16-bit stereo
+const ENCODED_STREAM_INITIAL_BUFFER_BYTES = PCM_FRAME_BYTES * 25; // 500ms of decoded 48kHz stereo PCM
+const ENCODED_STREAM_NO_DATA_TIMEOUT_MS = 45_000;
 
 export interface AudioPlayerOptions {
   maxVolume?: number;
@@ -121,6 +123,8 @@ export class AudioPlayer extends EventEmitter {
   private readonly maxVolume: number;
   private cleanupCurrentSource: (() => void | Promise<void>) | null = null;
   private discardingAudio = false;
+  private initialBuffering = false;
+  private initialBufferTargetBytes = 0;
 
   constructor(logger: Logger, options: AudioPlayerOptions = {}) {
     super();
@@ -240,6 +244,7 @@ export class AudioPlayer extends EventEmitter {
     options: {
       inputFormat?: string;
       seekSeconds?: number;
+      initialBufferBytes?: number;
       cleanup?: () => void | Promise<void>;
     } = {},
   ): void {
@@ -267,6 +272,7 @@ export class AudioPlayer extends EventEmitter {
       seekSeconds,
       cleanup: options.cleanup,
       stdin: input,
+      initialBufferBytes: options.initialBufferBytes ?? ENCODED_STREAM_INITIAL_BUFFER_BYTES,
     });
   }
 
@@ -279,6 +285,7 @@ export class AudioPlayer extends EventEmitter {
       seekSeconds: number;
       cleanup?: () => void | Promise<void>;
       stdin?: NodeJS.ReadableStream;
+      initialBufferBytes?: number;
     },
   ): void {
     this.stop();
@@ -291,6 +298,8 @@ export class AudioPlayer extends EventEmitter {
     this.ffmpegPaused = false;
     this.spawnFailed = false;
     this.cleanupCurrentSource = options.cleanup ?? null;
+    this.initialBufferTargetBytes = Math.max(0, options.initialBufferBytes ?? 0);
+    this.initialBuffering = this.initialBufferTargetBytes > 0;
 
     // Prevent rapid-fire spawn attempts when ffmpeg is broken
     if (this.consecutiveFailures >= AudioPlayer.MAX_CONSECUTIVE_FAILURES) {
@@ -334,7 +343,7 @@ export class AudioPlayer extends EventEmitter {
     let gotFirstData = false;
     const noDataTimeoutMs =
       options.source === "encoded-stream"
-        ? 30_000
+        ? ENCODED_STREAM_NO_DATA_TIMEOUT_MS
         : options.source === "pcm-stream" || options.source === "pcm-pipe"
           ? 20_000
           : 0;
@@ -359,6 +368,14 @@ export class AudioPlayer extends EventEmitter {
         return;
       }
       this.pcmBuffer = Buffer.concat([this.pcmBuffer, chunk]);
+      if (this.initialBuffering && this.pcmBuffer.length >= this.initialBufferTargetBytes) {
+        this.initialBuffering = false;
+        this.nextFrameTime = performance.now();
+        this.logger.info(
+          { bufferedBytes: this.pcmBuffer.length, targetBytes: this.initialBufferTargetBytes },
+          "Initial playback buffer filled",
+        );
+      }
       // Backpressure: pause FFmpeg stdout when buffer is too large
       if (this.pcmBuffer.length > AudioPlayer.BUFFER_HIGH_WATER && !this.ffmpegPaused && this.ffmpeg?.stdout) {
         this.ffmpeg.stdout.pause();
@@ -420,7 +437,11 @@ export class AudioPlayer extends EventEmitter {
       if (!this.frameLoopRunning) return;
 
       if (this.state === "playing") {
-        this.sendNextFrame();
+        if (this.initialBuffering) {
+          this.nextFrameTime = performance.now();
+        } else {
+          this.sendNextFrame();
+        }
       } else if (this.state === "paused") {
         this.nextFrameTime = performance.now();
       }
@@ -624,6 +645,8 @@ export class AudioPlayer extends EventEmitter {
     this.lastFrameAt = 0;
     this.duckingFactor = 1;
     this.discardingAudio = false;
+    this.initialBuffering = false;
+    this.initialBufferTargetBytes = 0;
   }
 
   /** Reset the consecutive failure counter (e.g. after user action) */
