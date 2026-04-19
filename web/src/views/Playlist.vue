@@ -70,6 +70,7 @@ interface SongItem {
   coverUrl: string;
   platform: 'netease' | 'qq' | 'bilibili' | 'youtube';
   mediaId?: string;
+  accountId?: string;
 }
 
 const playlist = ref<PlaylistDetail | null>(null);
@@ -79,23 +80,26 @@ const loading = ref(true);
 async function playAll() {
   const id = route.params.id as string;
   const platform = (route.query.platform as string) || 'netease';
-  await store.playPlaylist(id, platform);
+  const accountId = route.query.accountId as string | undefined;
+  await store.playPlaylist(id, platform, undefined, accountId);
 }
 
 async function playSongAt(index: number) {
   const id = route.params.id as string;
   const platform = (route.query.platform as string) || 'netease';
-  await store.playPlaylist(id, platform, index);
+  const accountId = route.query.accountId as string | undefined;
+  await store.playPlaylist(id, platform, index, accountId);
 }
 
 onMounted(async () => {
   const id = route.params.id as string;
   const platform = (route.query.platform as string) || 'netease';
+  const accountId = route.query.accountId as string | undefined;
 
   try {
     const [detailRes, songsRes] = await Promise.all([
-      axios.get(`/api/music/playlist/${id}/detail`, { params: { platform } }),
-      axios.get(`/api/music/playlist/${id}`, { params: { platform } }),
+      axios.get(`/api/music/playlist/${id}/detail`, { params: { platform, accountId } }),
+      axios.get(`/api/music/playlist/${id}`, { params: { platform, accountId } }),
     ]);
     playlist.value = detailRes.data.playlist;
     songs.value = songsRes.data.songs;

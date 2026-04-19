@@ -43,4 +43,23 @@ describe("QQ Music adapter", () => {
       },
     ]);
   });
+
+  it("keeps multiple QQ accounts and allows switching primary account", () => {
+    const provider = new QQMusicProvider("http://example.test");
+    provider.setCookie("uin=o12345; foo=bar;");
+    provider.setCookie("uin=o67890; foo=baz;");
+
+    expect(provider.getAccounts().map((account) => ({
+      id: account.id,
+      primary: account.primary,
+    }))).toEqual([
+      { id: "qq:67890", primary: true },
+      { id: "qq:12345", primary: false },
+    ]);
+
+    expect(provider.setPrimaryAccount("qq:12345")).toBe(true);
+    expect(provider.getPrimaryAccountId()).toBe("qq:12345");
+    expect(provider.getAccounts()[0]?.id).toBe("qq:12345");
+    expect(provider.getAccounts()[0]?.primary).toBe(true);
+  });
 });

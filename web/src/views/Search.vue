@@ -16,13 +16,24 @@
           autofocus
         />
       </div>
+      <div class="platform-tabs">
+        <button
+          v-for="platform in platforms"
+          :key="platform.value"
+          class="platform-tab"
+          :class="{ active: activePlatform === platform.value }"
+          @click="switchPlatform(platform.value)"
+        >
+          {{ platform.label }}
+        </button>
+      </div>
     </div>
 
-    <div v-if="loading" class="loading">搜索中...</div>
+    <div v-if="loading" class="loading">搜索{{ platformLabel(activePlatform) }}中...</div>
 
-    <div v-else-if="results.length > 0" class="results">
+    <div v-else-if="activeResults.length > 0" class="results">
       <SongCard
-        v-for="(song, i) in results"
+        v-for="(song, i) in activeResults"
         :key="`${song.platform}-${song.id}`"
         :song="song"
         :index="i + 1"
@@ -32,14 +43,14 @@
       />
     </div>
 
-    <div v-else-if="searched" class="empty">
-      未找到相关结果
+    <div v-else-if="searchedPlatforms[activePlatform]" class="empty">
+      {{ platformLabel(activePlatform) }}未找到相关结果
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
+import { computed, reactive, ref, onMounted } from 'vue';
 import { useRoute } from 'vue-router';
 import { Icon } from '@iconify/vue';
 import axios from 'axios';
@@ -49,29 +60,81 @@ import SongCard from '../components/SongCard.vue';
 const store = usePlayerStore();
 const route = useRoute();
 
-const query = ref((route.query.q as string) || '');
-const results = ref<Array<{ id: string; name: string; artist: string; album: string; duration: number; coverUrl: string; platform: 'netease' | 'qq' | 'bilibili' | 'youtube'; mediaId?: string }>>([]);
-const loading = ref(false);
-const searched = ref(false);
+type SearchPlatform = 'netease' | 'qq' | 'bilibili';
 
-async function doSearch() {
+const platforms = [
+  { value: 'netease', label: '网易云' },
+  { value: 'qq', label: 'QQ音乐' },
+  { value: 'bilibili', label: 'B站' },
+] satisfies Array<{ value: SearchPlatform; label: string }>;
+
+const query = ref((route.query.q as string) || '');
+const activePlatform = ref<SearchPlatform>('netease');
+const resultsByPlatform = reactive<Record<SearchPlatform, Array<{
+  id: string;
+  name: string;
+  artist: string;
+  album: string;
+  duration: number;
+  coverUrl: string;
+  platform: 'netease' | 'qq' | 'bilibili' | 'youtube';
+  mediaId?: string;
+  accountId?: string;
+}>>>({
+  netease: [],
+  qq: [],
+  bilibili: [],
+});
+const searchedPlatforms = reactive<Record<SearchPlatform, boolean>>({
+  netease: false,
+  qq: false,
+  bilibili: false,
+});
+const loading = ref(false);
+const lastSearchedQuery = ref('');
+
+const activeResults = computed(() => resultsByPlatform[activePlatform.value]);
+
+function platformLabel(platform: SearchPlatform) {
+  return platforms.find((item) => item.value === platform)?.label ?? platform;
+}
+
+async function doSearch(platform: SearchPlatform = activePlatform.value) {
   if (!query.value.trim()) return;
+  if (query.value !== lastSearchedQuery.value) {
+    for (const item of platforms) {
+      resultsByPlatform[item.value] = [];
+      searchedPlatforms[item.value] = false;
+    }
+    lastSearchedQuery.value = query.value;
+  }
   loading.value = true;
-  searched.value = true;
+  searchedPlatforms[platform] = true;
   try {
-    const res = await axios.get('/api/music/search/all', {
-      params: { q: query.value },
+    const res = await axios.get('/api/music/search', {
+      params: { q: query.value, platform },
     });
-    results.value = res.data.songs;
+    resultsByPlatform[platform] = res.data.songs ?? [];
   } catch {
-    results.value = [];
+    resultsByPlatform[platform] = [];
   } finally {
     loading.value = false;
   }
 }
 
+async function switchPlatform(platform: SearchPlatform) {
+  activePlatform.value = platform;
+  if (query.value.trim() && !searchedPlatforms[platform]) {
+    await doSearch(platform);
+  }
+}
+
 onMounted(() => {
-  if (query.value) doSearch();
+  const routePlatform = route.query.platform as SearchPlatform | undefined;
+  if (routePlatform && platforms.some((item) => item.value === routePlatform)) {
+    activePlatform.value = routePlatform;
+  }
+  if (query.value) doSearch(activePlatform.value);
 });
 </script>
 
@@ -89,6 +152,11 @@ onMounted(() => {
 
 .search-header {
   margin-bottom: 24px;
+}
+
+.platform-tabs {
+  display: flex;
+  gap: 8px;
 }
 
 .search-input-wrap {
@@ -117,6 +185,25 @@ onMounted(() => {
 
   &::placeholder {
     color: var(--text-tertiary);
+  }
+}
+
+.platform-tab {
+  padding: 8px 14px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+  transition: all var(--transition-fast);
+
+  &:hover {
+    color: var(--text-primary);
+  }
+
+  &.active {
+    background: var(--color-primary);
+    color: white;
   }
 }
 

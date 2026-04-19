@@ -2,11 +2,12 @@ import { Router } from "express";
 import type { MusicProvider } from "../../music/provider.js";
 import { YouTubeProvider } from "../../music/youtube.js";
 import type { CookieStore } from "../../music/auth.js";
+import { QQMusicProvider } from "../../music/qq.js";
 import type { Logger } from "../../logger.js";
 
 export function createAuthRouter(
   neteaseProvider: MusicProvider,
-  qqProvider: MusicProvider,
+  qqProvider: QQMusicProvider,
   bilibiliProvider: MusicProvider,
   logger: Logger,
   cookieStore?: CookieStore
@@ -33,6 +34,45 @@ export function createAuthRouter(
       logger.error({ err }, "Auth status check failed");
       res.status(500).json({ error: (err as Error).message });
     }
+  });
+
+  router.get("/accounts", (req, res) => {
+    const platform = req.query.platform as string;
+    if (platform !== "qq") {
+      res.status(400).json({ error: "Only QQ accounts are supported here" });
+      return;
+    }
+    res.json({
+      platform: "qq",
+      primaryAccountId: qqProvider.getPrimaryAccountId(),
+      accounts: qqProvider.getAccounts(),
+    });
+  });
+
+  router.post("/accounts/primary", (req, res) => {
+    const { platform, accountId } = req.body ?? {};
+    if (platform !== "qq") {
+      res.status(400).json({ error: "Only QQ accounts are supported here" });
+      return;
+    }
+    if (typeof accountId !== "string" || !accountId) {
+      res.status(400).json({ error: "accountId is required" });
+      return;
+    }
+    if (!qqProvider.getAccounts().some((account) => account.id === accountId)) {
+      res.status(404).json({ error: "QQ account not found" });
+      return;
+    }
+    if (cookieStore && !cookieStore.setQQPrimary(accountId)) {
+      res.status(404).json({ error: "QQ account not found in cookie store" });
+      return;
+    }
+    qqProvider.setPrimaryAccount(accountId);
+    res.json({
+      success: true,
+      primaryAccountId: qqProvider.getPrimaryAccountId(),
+      accounts: qqProvider.getAccounts(),
+    });
   });
 
   router.post("/qrcode", async (req, res) => {
@@ -65,7 +105,11 @@ export function createAuthRouter(
         const plat = (platform as string) === "bilibili" ? "bilibili" as const
           : (platform as string) === "qq" ? "qq" as const : "netease" as const;
         if (cookie && cookieStore) {
-          cookieStore.save(plat, cookie);
+          if (plat === "qq") {
+            cookieStore.saveQQAccount(cookie, true);
+          } else {
+            cookieStore.save(plat, cookie);
+          }
           logger.info({ platform: plat }, "Cookie persisted to disk");
         }
       }
@@ -137,7 +181,11 @@ export function createAuthRouter(
     const plat = platform === "bilibili" ? "bilibili" as const
       : platform === "qq" ? "qq" as const : "netease" as const;
     if (cookieStore) {
-      cookieStore.save(plat, cookie);
+      if (plat === "qq") {
+        cookieStore.saveQQAccount(cookie, true);
+      } else {
+        cookieStore.save(plat, cookie);
+      }
     }
     res.json({ success: true });
   });

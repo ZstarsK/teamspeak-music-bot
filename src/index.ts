@@ -48,8 +48,16 @@ async function main() {
   const cookieStore = createCookieStore(COOKIE_DIR);
   const neteaseCookie = cookieStore.load("netease");
   if (neteaseCookie) neteaseProvider.setCookie(neteaseCookie);
-  const qqCookie = cookieStore.load("qq");
-  if (qqCookie) qqProvider.setCookie(qqCookie);
+  const qqAccounts = cookieStore.loadQQAccounts();
+  if (qqAccounts.length > 0) {
+    qqProvider.loadAccounts(
+      qqAccounts.map((account) => ({ id: account.id, cookie: account.cookie })),
+      cookieStore.getQQPrimaryId(),
+    );
+  } else {
+    const qqCookie = cookieStore.load("qq");
+    if (qqCookie) qqProvider.setCookie(qqCookie);
+  }
   const bilibiliCookie = cookieStore.load("bilibili");
   if (bilibiliCookie) bilibiliProvider.setCookie(bilibiliCookie);
 

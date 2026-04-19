@@ -4,6 +4,7 @@ import path from "node:path";
 import { WebSocketServer } from "ws";
 import type { BotManager } from "../bot/manager.js";
 import type { MusicProvider } from "../music/provider.js";
+import type { QQMusicProvider } from "../music/qq.js";
 import type { BotDatabase } from "../data/database.js";
 import type { BotConfig } from "../data/config.js";
 import type { Logger } from "../logger.js";
@@ -18,7 +19,7 @@ export interface WebServerOptions {
   port: number;
   botManager: BotManager;
   neteaseProvider: MusicProvider;
-  qqProvider: MusicProvider;
+  qqProvider: QQMusicProvider;
   bilibiliProvider: MusicProvider;
   database: BotDatabase;
   config: BotConfig;

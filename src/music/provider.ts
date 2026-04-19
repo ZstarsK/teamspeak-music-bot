@@ -16,6 +16,7 @@ export interface Song {
   coverUrl: string;
   platform: MusicPlatform;
   mediaId?: string;
+  accountId?: string;
 }
 
 export interface SongWithUrl extends Song {

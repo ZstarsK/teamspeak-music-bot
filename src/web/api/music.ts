@@ -1,11 +1,12 @@
 import { Router } from "express";
 import type { MusicProvider } from "../../music/provider.js";
+import { QQMusicProvider } from "../../music/qq.js";
 import { YouTubeProvider } from "../../music/youtube.js";
 import type { Logger } from "../../logger.js";
 
 export function createMusicRouter(
   neteaseProvider: MusicProvider,
-  qqProvider: MusicProvider,
+  qqProvider: QQMusicProvider,
   bilibiliProvider: MusicProvider,
   logger: Logger
 ): Router {
@@ -82,8 +83,12 @@ export function createMusicRouter(
 
   router.get("/playlist/:id", async (req, res) => {
     try {
-      const provider = getProvider(req.query.platform as string);
-      const songs = await provider.getPlaylistSongs(req.params.id);
+      const platform = req.query.platform as string | undefined;
+      const accountId = req.query.accountId as string | undefined;
+      const provider = getProvider(platform);
+      const songs = platform === "qq"
+        ? await qqProvider.getPlaylistSongsForAccount(req.params.id, accountId)
+        : await provider.getPlaylistSongs(req.params.id);
       res.json({ songs });
     } catch (err) {
       res.status(500).json({ error: (err as Error).message });
@@ -178,8 +183,16 @@ export function createMusicRouter(
 
   router.get("/playlist/:id/detail", async (req, res) => {
     try {
-      const provider = getProvider(req.query.platform as string);
-      if (provider.getPlaylistDetail) {
+      const platform = req.query.platform as string | undefined;
+      const accountId = req.query.accountId as string | undefined;
+      const provider = getProvider(platform);
+      if (platform === "qq") {
+        const playlist = await qqProvider.getPlaylistDetailForAccount(req.params.id, accountId);
+        if (playlist) {
+          res.json({ playlist });
+          return;
+        }
+      } else if (provider.getPlaylistDetail) {
         const playlist = await provider.getPlaylistDetail(req.params.id);
         if (playlist) {
           res.json({ playlist });

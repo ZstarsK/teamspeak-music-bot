@@ -304,6 +304,36 @@
           />
           <button class="btn-primary btn-save" @click="saveCookie('qq')">保存Cookie</button>
         </div>
+
+        <div v-if="qqAccounts.length > 0" class="linked-accounts">
+          <div class="linked-accounts-title">已登录账号</div>
+          <div
+            v-for="account in qqAccounts"
+            :key="account.id"
+            class="linked-account-item"
+          >
+            <img
+              v-if="account.avatarUrl"
+              :src="account.avatarUrl"
+              alt=""
+              class="linked-account-avatar"
+            />
+            <div v-else class="linked-account-avatar linked-account-avatar--placeholder">Q</div>
+            <div class="linked-account-meta">
+              <div class="linked-account-name">{{ account.name }}</div>
+              <div class="linked-account-subtitle">
+                {{ account.primary ? '主账号' : '附加账号' }}
+              </div>
+            </div>
+            <button
+              class="btn-sm"
+              :disabled="account.primary"
+              @click="setPrimaryQqAccount(account.id)"
+            >
+              {{ account.primary ? '当前主账号' : '设为主账号' }}
+            </button>
+          </div>
+        </div>
       </div>
       <!-- BiliBili -->
       <div class="account-card">
@@ -526,6 +556,13 @@ const bilibiliLoginMode = ref<'qr' | 'cookie' | null>(null);
 const neteaseAuth = reactive({ loggedIn: false, nickname: '', avatarUrl: '' });
 const qqAuth = reactive({ loggedIn: false, nickname: '', avatarUrl: '' });
 const bilibiliAuth = reactive({ loggedIn: false, nickname: '', avatarUrl: '' });
+const qqAccounts = ref<Array<{
+  id: string;
+  name: string;
+  platform: string;
+  avatarUrl?: string;
+  primary: boolean;
+}>>([]);
 
 // QR state
 interface QrState {
@@ -563,6 +600,28 @@ async function checkAuthStatus() {
     Object.assign(bilibiliAuth, bRes.data);
   } catch {
     // API not ready
+  }
+}
+
+async function loadQqAccounts() {
+  try {
+    const res = await axios.get('/api/auth/accounts', { params: { platform: 'qq' } });
+    qqAccounts.value = res.data.accounts ?? [];
+  } catch {
+    qqAccounts.value = [];
+  }
+}
+
+async function setPrimaryQqAccount(accountId: string) {
+  try {
+    await axios.post('/api/auth/accounts/primary', { platform: 'qq', accountId });
+    await Promise.all([
+      checkAuthStatus(),
+      loadQqAccounts(),
+    ]);
+    store.lastFetchTime = 0;
+  } catch {
+    // Ignore
   }
 }
 
@@ -621,7 +680,11 @@ async function pollQrStatus(platform: string) {
       if (qr.pollTimer) clearInterval(qr.pollTimer);
       qr.pollTimer = null;
       // Refresh auth status
-      await checkAuthStatus();
+      await Promise.all([
+        checkAuthStatus(),
+        platform === 'qq' ? loadQqAccounts() : Promise.resolve(),
+      ]);
+      store.lastFetchTime = 0;
     } else if (qr.status === 'expired') {
       if (qr.pollTimer) clearInterval(qr.pollTimer);
       qr.pollTimer = null;
@@ -728,7 +791,11 @@ async function saveCookie(platform: string) {
   if (!cookie) return;
   try {
     await axios.post('/api/auth/cookie', { platform, cookie });
-    await checkAuthStatus();
+    await Promise.all([
+      checkAuthStatus(),
+      platform === 'qq' ? loadQqAccounts() : Promise.resolve(),
+    ]);
+    store.lastFetchTime = 0;
   } catch {
     // Ignore
   }
@@ -759,6 +826,7 @@ async function saveBotSettings() {
 onMounted(() => {
   store.fetchBots(); // Refresh bot status on page visit
   checkAuthStatus();
+  loadQqAccounts();
   loadQuality();
   loadBotSettings();
 });
@@ -951,6 +1019,59 @@ onUnmounted(() => {
   font-size: 12px;
   color: var(--text-tertiary);
   &.logged { color: #4caf50; }
+}
+
+.linked-accounts {
+  margin-top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.linked-accounts-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-tertiary);
+}
+
+.linked-account-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  background: var(--bg-card);
+  border-radius: var(--radius-sm);
+}
+
+.linked-account-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  object-fit: cover;
+
+  &--placeholder {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--hover-bg);
+    font-weight: 700;
+  }
+}
+
+.linked-account-meta {
+  flex: 1;
+  min-width: 0;
+}
+
+.linked-account-name {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.linked-account-subtitle {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--text-tertiary);
 }
 
 .login-methods {

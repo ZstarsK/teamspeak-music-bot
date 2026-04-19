@@ -142,6 +142,7 @@ export function createPlayerRouter(
       coverUrl: typeof raw.coverUrl === "string" ? raw.coverUrl : "",
       platform,
       ...(typeof raw.mediaId === "string" && raw.mediaId ? { mediaId: raw.mediaId } : {}),
+      ...(typeof raw.accountId === "string" && raw.accountId ? { accountId: raw.accountId } : {}),
     };
   };
 
@@ -260,7 +261,7 @@ export function createPlayerRouter(
   router.post("/:botId/play-playlist", async (req, res) => {
     try {
       const bot = (req as any).bot;
-      const { playlistId, platform, startIndex } = req.body;
+      const { playlistId, platform, startIndex, accountId } = req.body;
       if (
         startIndex !== undefined &&
         (
@@ -284,7 +285,9 @@ export function createPlayerRouter(
       bot.getPlayer().stop();
       bot.getPlayer().resetFailures();
 
-      const songs = await provider.getPlaylistSongs(playlistId);
+      const songs = platform === "qq" && typeof accountId === "string" && "getPlaylistSongsForAccount" in provider
+        ? await (provider as any).getPlaylistSongsForAccount(playlistId, accountId)
+        : await provider.getPlaylistSongs(playlistId);
       if (songs.length === 0) {
         res.json({ message: "Playlist is empty" });
         return;

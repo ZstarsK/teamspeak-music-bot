@@ -10,6 +10,7 @@ export interface Song {
   coverUrl: string;
   platform: 'netease' | 'qq' | 'bilibili' | 'youtube';
   mediaId?: string;
+  accountId?: string;
 }
 
 export interface BotStatus {
@@ -286,12 +287,13 @@ export const usePlayerStore = defineStore('player', {
       await axios.post(`/api/player/${this.activeBotId}/add-by-id`, { songId, platform, song });
     },
 
-    async playPlaylist(playlistId: string, platform = 'netease', startIndex?: number) {
+    async playPlaylist(playlistId: string, platform = 'netease', startIndex?: number, accountId?: string) {
       if (!this.activeBotId) return;
       await axios.post(`/api/player/${this.activeBotId}/play-playlist`, {
         playlistId,
         platform,
         ...(typeof startIndex === 'number' ? { startIndex } : {}),
+        ...(typeof accountId === 'string' && accountId ? { accountId } : {}),
       });
       this._setTiming(this.activeBotId, { serverElapsed: 0 });
       this._syncAfterAction();

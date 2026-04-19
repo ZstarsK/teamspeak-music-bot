@@ -13,6 +13,7 @@ export interface QueuedSong {
   platform: "netease" | "qq" | "bilibili" | "youtube";
   url?: string; // resolved lazily at play time
   mediaId?: string;
+  accountId?: string;
   coverUrl: string;
   duration: number; // seconds
 }

@@ -1,5 +1,6 @@
 import axios, { type AxiosInstance } from "axios";
 import type {
+  MusicAccount,
   MusicProvider,
   Song,
   Playlist,
@@ -14,8 +15,9 @@ import { parseLyrics } from "./netease.js";
 export class QQMusicProvider implements MusicProvider {
   readonly platform = "qq" as const;
   private api: AxiosInstance;
-  private cookie = "";
   private quality = "exhigh";
+  private accounts = new Map<string, string>();
+  private primaryAccountId: string | null = null;
 
   constructor(baseUrl: string) {
     this.api = axios.create({
@@ -32,11 +34,44 @@ export class QQMusicProvider implements MusicProvider {
     return this.quality;
   }
 
-  private get cookieParams(): Record<string, string> {
-    return this.cookie ? { cookie: this.cookie } : {};
+  private extractUin(cookie: string): string | null {
+    const match = /(?:^|; )uin=o?0?(\d+)/.exec(cookie);
+    return match ? match[1] : null;
   }
 
-  private mapSong(s: any): Song {
+  private makeAccountId(uin: string): string {
+    return `qq:${uin}`;
+  }
+
+  private getResolvedAccountId(accountId?: string): string | null {
+    if (accountId && this.accounts.has(accountId)) return accountId;
+    if (this.primaryAccountId && this.accounts.has(this.primaryAccountId)) {
+      return this.primaryAccountId;
+    }
+    return this.accounts.keys().next().value ?? null;
+  }
+
+  private getCookieForAccount(accountId?: string): string {
+    const resolvedAccountId = this.getResolvedAccountId(accountId);
+    return resolvedAccountId ? (this.accounts.get(resolvedAccountId) ?? "") : "";
+  }
+
+  private getCookieParams(accountId?: string): Record<string, string> {
+    const cookie = this.getCookieForAccount(accountId);
+    return cookie ? { cookie } : {};
+  }
+
+  private buildAccount(accountId: string): MusicAccount {
+    const uin = accountId.replace(/^qq:/, "");
+    return {
+      id: accountId,
+      name: `QQ音乐: QQ ${uin}`,
+      platform: "qq",
+      avatarUrl: `https://q.qlogo.cn/headimg_dl?dst_uin=${uin}&spec=100`,
+    };
+  }
+
+  private mapSong(s: any, accountId?: string): Song {
     const id = String(s.songmid ?? s.mid ?? s.songMid ?? s.id ?? s.songid ?? "");
     const albumMid = s.albummid ?? s.album?.mid ?? s.album?.pmid ?? "";
     const mediaId = s.strMediaMid ?? s.media_mid ?? s.file?.media_mid ?? s.file?.mediaMid ?? "";
@@ -51,15 +86,19 @@ export class QQMusicProvider implements MusicProvider {
         : "",
       platform: "qq",
       ...(mediaId ? { mediaId: String(mediaId) } : {}),
+      ...(accountId ? { accountId } : {}),
     };
   }
 
   async search(query: string, limit = 20): Promise<SearchResult> {
     const res = await this.api.get("/getSearchByKey", {
-      params: { key: query, pageSize: limit, ...this.cookieParams },
+      params: { key: query, pageSize: limit, limit, ...this.getCookieParams() },
     });
 
-    const songs: Song[] = (res.data?.response?.data?.song?.list ?? [])
+    const songs: Song[] = (res.data?.response?.data?.song?.list
+      ?? res.data?.data?.song?.list
+      ?? res.data?.data?.list
+      ?? [])
       .map((s: any) => this.mapSong(s))
       .filter((s: Song) => s.id);
 
@@ -71,7 +110,7 @@ export class QQMusicProvider implements MusicProvider {
       params: {
         songmid: songId,
         ...(song?.mediaId ? { mediaId: song.mediaId } : {}),
-        ...this.cookieParams,
+        ...this.getCookieParams(song?.accountId),
       },
     });
     const playUrl = res.data?.data?.playUrl?.[songId];
@@ -87,7 +126,7 @@ export class QQMusicProvider implements MusicProvider {
     // stub is sufficient to let /play-by-id and /add-by-id flows succeed.
     try {
       const res = await this.api.get("/getSongInfo", {
-        params: { songmid: songId, ...this.cookieParams },
+        params: { songmid: songId, ...this.getCookieParams() },
       });
       const s = res.data?.response?.data;
       if (s && s.track_info) {
@@ -111,8 +150,12 @@ export class QQMusicProvider implements MusicProvider {
   }
 
   async getPlaylistDetail(playlistId: string): Promise<PlaylistDetail | null> {
+    return this.getPlaylistDetailForAccount(playlistId);
+  }
+
+  async getPlaylistDetailForAccount(playlistId: string, accountId?: string): Promise<PlaylistDetail | null> {
     const res = await this.api.get("/getSongListDetail", {
-      params: { disstid: playlistId, ...this.cookieParams },
+      params: { disstid: playlistId, ...this.getCookieParams(accountId) },
     });
     const cdlist = res.data?.response?.cdlist ?? [];
     const p = cdlist[0];
@@ -132,23 +175,28 @@ export class QQMusicProvider implements MusicProvider {
             0
         ) || 0,
       platform: "qq",
+      ...(accountId ? { account: this.buildAccount(accountId) } : {}),
     };
   }
 
   async getPlaylistSongs(playlistId: string): Promise<Song[]> {
+    return this.getPlaylistSongsForAccount(playlistId);
+  }
+
+  async getPlaylistSongsForAccount(playlistId: string, accountId?: string): Promise<Song[]> {
     const res = await this.api.get("/getSongListDetail", {
-      params: { disstid: playlistId, ...this.cookieParams },
+      params: { disstid: playlistId, ...this.getCookieParams(accountId) },
     });
     const cdlist = res.data?.response?.cdlist ?? [];
     if (cdlist.length === 0) return [];
     return (cdlist[0].songlist ?? [])
-      .map((s: any) => this.mapSong(s))
+      .map((s: any) => this.mapSong(s, accountId))
       .filter((s: Song) => s.id);
   }
 
   async getRecommendPlaylists(): Promise<Playlist[]> {
     const res = await this.api.get("/getSongLists", {
-      params: { categoryId: 10000000, pageSize: 10, ...this.cookieParams },
+      params: { categoryId: 10000000, pageSize: 10, ...this.getCookieParams() },
     });
     return (res.data?.response?.data?.list ?? []).map((p: any) => ({
       id: String(p.dissid),
@@ -161,7 +209,7 @@ export class QQMusicProvider implements MusicProvider {
 
   async getAlbumSongs(albumId: string): Promise<Song[]> {
     const res = await this.api.get("/getAlbumInfo", {
-      params: { albummid: albumId, ...this.cookieParams },
+      params: { albummid: albumId, ...this.getCookieParams() },
     });
     return (res.data?.response?.data?.list ?? [])
       .map((s: any) => this.mapSong(s))
@@ -170,7 +218,7 @@ export class QQMusicProvider implements MusicProvider {
 
   async getLyrics(songId: string): Promise<LyricLine[]> {
     const res = await this.api.get("/getLyric", {
-      params: { songmid: songId, ...this.cookieParams },
+      params: { songmid: songId, ...this.getCookieParams() },
     });
     return parseLyrics(
       res.data?.response?.lyric ?? res.data?.lyric ?? "",
@@ -216,10 +264,10 @@ export class QQMusicProvider implements MusicProvider {
     //   success:  { isOk: true, message: '登录成功', session: { cookie, ... } }
     //   scanning: { isOk: false, refresh: false, message: '未扫描二维码' }
     //   expired:  { isOk: false, refresh: true,  message: '二维码已失效' }
-    const body = res.data;
+      const body = res.data;
     if (body?.isOk === true) {
       const cookie: string = body.session?.cookie ?? "";
-      if (cookie) this.cookie = cookie;
+      if (cookie) this.setCookie(cookie);
       return "confirmed";
     }
     if (body?.refresh === true) return "expired";
@@ -229,15 +277,54 @@ export class QQMusicProvider implements MusicProvider {
   }
 
   setCookie(cookie: string): void {
-    this.cookie = cookie;
+    const uin = this.extractUin(cookie);
+    if (!uin) return;
+    const accountId = this.makeAccountId(uin);
+    this.accounts.set(accountId, cookie);
+    this.primaryAccountId = accountId;
   }
 
   getCookie(): string {
-    return this.cookie;
+    return this.getCookieForAccount();
+  }
+
+  loadAccounts(accounts: Array<{ id: string; cookie: string }>, primaryId?: string | null): void {
+    this.accounts.clear();
+    for (const account of accounts) {
+      if (account.id && account.cookie) {
+        this.accounts.set(account.id, account.cookie);
+      }
+    }
+    if (primaryId && this.accounts.has(primaryId)) {
+      this.primaryAccountId = primaryId;
+    } else {
+      this.primaryAccountId = this.accounts.keys().next().value ?? null;
+    }
+  }
+
+  setPrimaryAccount(accountId: string): boolean {
+    if (!this.accounts.has(accountId)) return false;
+    this.primaryAccountId = accountId;
+    return true;
+  }
+
+  getPrimaryAccountId(): string | null {
+    return this.getResolvedAccountId();
+  }
+
+  getAccounts(): Array<MusicAccount & { primary: boolean }> {
+    const primaryId = this.getResolvedAccountId();
+    return Array.from(this.accounts.keys())
+      .sort((a, b) => (a === primaryId ? -1 : b === primaryId ? 1 : a.localeCompare(b)))
+      .map((accountId) => ({
+        ...this.buildAccount(accountId),
+        primary: accountId === primaryId,
+      }));
   }
 
   async getAuthStatus(): Promise<AuthStatus> {
-    if (!this.cookie) return { loggedIn: false };
+    const cookie = this.getCookieForAccount();
+    if (!cookie) return { loggedIn: false };
     // /getUserAvatar in @sansenjian/qq-music-api 2.x is NOT registered on
     // the main router; the real endpoint is /user/getUserAvatar, and even
     // that just builds a static URL from a uin without validating the
@@ -249,12 +336,12 @@ export class QQMusicProvider implements MusicProvider {
     // the library 400s with "缺少 uin 参数" otherwise. Parse it out of the
     // cookie (uin=<qq>; comes after the various *uin prefixed names, which
     // is why the regex anchors on a word boundary).
-    const uinMatch = /(?:^|; )uin=o?0?(\d+)/.exec(this.cookie);
+    const uinMatch = /(?:^|; )uin=o?0?(\d+)/.exec(cookie);
     const uin = uinMatch ? uinMatch[1] : "";
     if (!uin) return { loggedIn: false };
     try {
       const res = await this.api.get("/user/getUserPlaylists", {
-        params: { uin, ...this.cookieParams },
+        params: { uin, ...this.getCookieParams(this.getResolvedAccountId()) },
       });
       if (res.data?.response?.code !== 0) return { loggedIn: false };
       return {
@@ -268,20 +355,24 @@ export class QQMusicProvider implements MusicProvider {
   }
 
   async getUserPlaylists(): Promise<Playlist[]> {
-    if (!this.cookie) return [];
-    const uinMatch = /(?:^|; )uin=o?0?(\d+)/.exec(this.cookie);
+    const accounts = this.getAccounts();
+    if (accounts.length === 0) return [];
+    const results = await Promise.allSettled(
+      accounts.map((account) => this.getUserPlaylistsForAccount(account.id))
+    );
+    return results.flatMap((result) => result.status === "fulfilled" ? result.value : []);
+  }
+
+  async getUserPlaylistsForAccount(accountId: string): Promise<Playlist[]> {
+    const cookie = this.getCookieForAccount(accountId);
+    if (!cookie) return [];
+    const uinMatch = /(?:^|; )uin=o?0?(\d+)/.exec(cookie);
     const uin = uinMatch ? uinMatch[1] : "";
     if (!uin) return [];
 
-    const account = {
-      id: `qq:${uin}`,
-      name: `QQ音乐: QQ ${uin}`,
-      platform: "qq" as const,
-      avatarUrl: `https://q.qlogo.cn/headimg_dl?dst_uin=${uin}&spec=100`,
-    };
-
+    const account = this.buildAccount(accountId);
     const res = await this.api.get("/user/getUserPlaylists", {
-      params: { uin, ...this.cookieParams },
+      params: { uin, ...this.getCookieParams(accountId) },
     });
 
     const playlists = res.data?.response?.data?.playlists ?? [];
