@@ -92,7 +92,7 @@ const DUCKING_FADE_OUT_MS = 160;
 const PCM_SAMPLE_BLOCK_BYTES = 4; // 16-bit stereo
 const ENCODED_STREAM_INITIAL_BUFFER_BYTES = PCM_FRAME_BYTES * 100; // 2s of decoded 48kHz stereo PCM
 const ENCODED_STREAM_REBUFFER_BYTES = PCM_FRAME_BYTES * 75; // 1.5s of decoded 48kHz stereo PCM
-const ENCODED_STREAM_NO_DATA_TIMEOUT_MS = 60_000;
+const ENCODED_STREAM_NO_DATA_TIMEOUT_MS = 15_000;
 
 export interface AudioPlayerOptions {
   maxVolume?: number;
@@ -214,6 +214,7 @@ export class AudioPlayer extends EventEmitter {
       inputSampleRate?: number;
       seekSeconds?: number;
       suppressTrackEnd?: boolean;
+      onSourceFailure?: (err: Error) => void | Promise<void>;
       cleanup?: () => void | Promise<void>;
     } = {},
   ): void {
@@ -242,6 +243,7 @@ export class AudioPlayer extends EventEmitter {
       cleanup: options.cleanup,
       stdin: input,
       suppressTrackEnd: options.suppressTrackEnd,
+      onSourceFailure: options.onSourceFailure,
     });
   }
 
@@ -253,6 +255,7 @@ export class AudioPlayer extends EventEmitter {
       initialBufferBytes?: number;
       rebufferBytes?: number;
       suppressTrackEnd?: boolean;
+      onSourceFailure?: (err: Error) => void | Promise<void>;
       cleanup?: () => void | Promise<void>;
     } = {},
   ): void {
@@ -283,6 +286,7 @@ export class AudioPlayer extends EventEmitter {
       initialBufferBytes: options.initialBufferBytes ?? ENCODED_STREAM_INITIAL_BUFFER_BYTES,
       rebufferBytes: options.rebufferBytes ?? ENCODED_STREAM_REBUFFER_BYTES,
       suppressTrackEnd: options.suppressTrackEnd,
+      onSourceFailure: options.onSourceFailure,
     });
   }
 
@@ -298,6 +302,7 @@ export class AudioPlayer extends EventEmitter {
       initialBufferBytes?: number;
       rebufferBytes?: number;
       suppressTrackEnd?: boolean;
+      onSourceFailure?: (err: Error) => void | Promise<void>;
     },
   ): void {
     this.stop();
@@ -315,6 +320,14 @@ export class AudioPlayer extends EventEmitter {
     this.rebufferTargetBytes = Math.max(0, options.rebufferBytes ?? 0);
     this.rebuffering = false;
     this.suppressTrackEnd = options.suppressTrackEnd === true;
+    let sourceFailureReported = false;
+    const reportSuppressedSourceFailure = (err: Error): void => {
+      if (sourceFailureReported) return;
+      sourceFailureReported = true;
+      Promise.resolve()
+        .then(() => options.onSourceFailure?.(err))
+        .catch((callbackErr) => this.logger.warn({ err: callbackErr }, "Playback source failure callback failed"));
+    };
 
     // Prevent rapid-fire spawn attempts when ffmpeg is broken
     if (this.consecutiveFailures >= AudioPlayer.MAX_CONSECUTIVE_FAILURES) {
@@ -371,6 +384,7 @@ export class AudioPlayer extends EventEmitter {
         this.ffmpeg?.kill("SIGTERM");
         if (this.suppressTrackEnd) {
           this.logger.warn({ source: options.source }, "Suppressing no-data error for externally controlled playback source");
+          reportSuppressedSourceFailure(err);
           return;
         }
         this.emit("error", err);
@@ -413,6 +427,15 @@ export class AudioPlayer extends EventEmitter {
     this.ffmpeg.on("close", (code, signal) => {
       if (noDataTimer) clearTimeout(noDataTimer);
       this.logger.info({ exitCode: code, signal, gotData: gotFirstData, framesPlayed: this.framesPlayed }, "FFmpeg process closed");
+      if (
+        this.sessionId === playSessionId &&
+        this.suppressTrackEnd &&
+        (code !== 0 || !gotFirstData)
+      ) {
+        reportSuppressedSourceFailure(
+          new Error(`Externally controlled source stopped before audio completed (code=${code ?? "null"}, signal=${signal ?? "null"}, gotData=${gotFirstData})`),
+        );
+      }
       if (this.sessionId === playSessionId) {
         this.ffmpeg = null; // Signal frame loop that no more data is coming
       }

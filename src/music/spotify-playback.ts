@@ -26,6 +26,8 @@ const PCM_GATE_READY_INPUT_BYTES = 44100 * 4 / 10; // 100ms of s16le stereo at l
 const LIBRESPOT_EVENT_POLL_INTERVAL_MS = 80;
 const LIBRESPOT_EVENT_RETENTION = 200;
 const LIBRESPOT_BITRATE = "160";
+const SPOTIFY_SOURCE_RECOVERY_MAX_ATTEMPTS = 2;
+const SPOTIFY_SOURCE_RECOVERY_DELAY_MS = 350;
 
 export interface SpotifyLibrespotEvent {
   PLAYER_EVENT?: string;
@@ -196,6 +198,8 @@ export class SpotifyPlaybackEngine {
   private encodedGate: OggSyncGate | null = null;
   private recentEvents: SpotifyLibrespotEvent[] = [];
   private playbackCommandId = 0;
+  private sourceRecoveryTrackUri: string | null = null;
+  private sourceRecoveryAttempts = 0;
 
   constructor(
     private provider: SpotifyProvider,
@@ -218,7 +222,11 @@ export class SpotifyPlaybackEngine {
   async play(song: Song, player: AudioPlayer, onEnd: () => void | Promise<void>): Promise<void> {
     const account = await this.provider.getPlaybackAccount(song.accountId);
     const trackUri = this.provider.getTrackUri(song.id);
-    this.playbackCommandId += 1;
+    if (this.sourceRecoveryTrackUri !== trackUri) {
+      this.sourceRecoveryTrackUri = trackUri;
+      this.sourceRecoveryAttempts = 0;
+    }
+    const commandId = ++this.playbackCommandId;
     const playerState = player.getState();
     let sameProcess = Boolean(this.librespot && !this.librespot.killed && this.activeAccountId === account.id);
     await this.ensureProcess(account, onEnd);
@@ -235,20 +243,28 @@ export class SpotifyPlaybackEngine {
       if (sameProcess) {
         this.prepareEncodedBoundary(player);
       }
-      this.attachPlayerToStream(player);
+      this.activeAccountId = account.id;
+      this.activeDeviceId = deviceId;
+      this.activeTrackUri = trackUri;
+      this.activeTrackId = song.id;
+      this.attachPlayerToStream(player, song, onEnd, commandId);
       reusingStream = false;
     } else if (!reusingStream) {
-      this.attachPlayerToStream(player);
+      this.activeAccountId = account.id;
+      this.activeDeviceId = deviceId;
+      this.activeTrackUri = trackUri;
+      this.activeTrackId = song.id;
+      this.attachPlayerToStream(player, song, onEnd, commandId);
     } else if (pcmReusingStream) {
       this.logger.info(
         { deviceId: this.activeDeviceId, fromTrackUri: this.activeTrackUri, toTrackUri: trackUri, playerState },
         "Reusing existing Spotify PCM stream",
       );
+      this.activeAccountId = account.id;
+      this.activeDeviceId = deviceId;
+      this.activeTrackUri = trackUri;
+      this.activeTrackId = song.id;
     }
-    this.activeAccountId = account.id;
-    this.activeDeviceId = deviceId;
-    this.activeTrackUri = trackUri;
-    this.activeTrackId = song.id;
     try {
       if (pcmReusingStream) {
         await this.withTransition(async () => {
@@ -393,6 +409,8 @@ export class SpotifyPlaybackEngine {
     this.streamAttached = false;
     this.currentOutputMode = "pcm";
     this.transitionInFlight = false;
+    this.sourceRecoveryTrackUri = null;
+    this.sourceRecoveryAttempts = 0;
   }
 
   private ensureRuntimeFiles(): void {
@@ -606,20 +624,28 @@ export class SpotifyPlaybackEngine {
     this.playbackStarted = false;
     this.activeTrackUri = null;
     this.activeTrackId = null;
+    this.sourceRecoveryTrackUri = null;
+    this.sourceRecoveryAttempts = 0;
     Promise.resolve()
       .then(() => onEnd())
       .catch((err) => this.logger.error({ err }, "Spotify end-of-track handler failed"));
   }
 
-  private attachPlayerToStream(player: AudioPlayer): void {
+  private attachPlayerToStream(
+    player: AudioPlayer,
+    song: Song,
+    onEnd: () => void | Promise<void>,
+    commandId: number,
+  ): void {
     const cleanup = this.createPlaybackCleanup();
+    const onSourceFailure = this.createSourceFailureHandler(song, player, onEnd, commandId);
     if (this.currentOutputMode === "encoded") {
       this.destroyPcmGate();
-      this.startEncodedPlayer(player, cleanup);
+      this.startEncodedPlayer(player, cleanup, onSourceFailure);
       return;
     } else {
       this.destroyEncodedGate();
-      this.startPcmPlayer(player, cleanup);
+      this.startPcmPlayer(player, cleanup, onSourceFailure);
       return;
     }
   }
@@ -658,6 +684,74 @@ export class SpotifyPlaybackEngine {
     };
   }
 
+  private createSourceFailureHandler(
+    song: Song,
+    player: AudioPlayer,
+    onEnd: () => void | Promise<void>,
+    commandId: number,
+  ): (err: Error) => void {
+    return (err) => {
+      this.handleSourceFailure(song, player, onEnd, commandId, err).catch((recoveryErr) => {
+        this.logger.error({ err: recoveryErr, songId: song.id }, "Spotify source recovery failed");
+      });
+    };
+  }
+
+  private async handleSourceFailure(
+    song: Song,
+    player: AudioPlayer,
+    onEnd: () => void | Promise<void>,
+    commandId: number,
+    err: Error,
+  ): Promise<void> {
+    const trackUri = this.provider.getTrackUri(song.id);
+    if (
+      commandId !== this.playbackCommandId ||
+      this.activeTrackUri !== trackUri ||
+      this.activeTrackId !== song.id ||
+      this.transitionInFlight
+    ) {
+      this.logger.debug(
+        { err, trackUri, activeTrackUri: this.activeTrackUri, commandId, activeCommandId: this.playbackCommandId },
+        "Ignoring stale Spotify source failure",
+      );
+      return;
+    }
+
+    if (this.sourceRecoveryTrackUri !== trackUri) {
+      this.sourceRecoveryTrackUri = trackUri;
+      this.sourceRecoveryAttempts = 0;
+    }
+
+    if (this.sourceRecoveryAttempts >= SPOTIFY_SOURCE_RECOVERY_MAX_ATTEMPTS) {
+      this.logger.warn(
+        { err, trackUri, attempts: this.sourceRecoveryAttempts },
+        "Spotify source recovery limit reached, advancing queue",
+      );
+      this.handleTrackEnd(onEnd);
+      return;
+    }
+
+    this.sourceRecoveryAttempts += 1;
+    const attempt = this.sourceRecoveryAttempts;
+    this.logger.warn(
+      { err, trackUri, attempt, maxAttempts: SPOTIFY_SOURCE_RECOVERY_MAX_ATTEMPTS },
+      "Recovering Spotify source by restarting current track",
+    );
+    await sleep(SPOTIFY_SOURCE_RECOVERY_DELAY_MS);
+
+    if (
+      commandId !== this.playbackCommandId ||
+      this.activeTrackUri !== trackUri ||
+      this.activeTrackId !== song.id
+    ) {
+      this.logger.debug({ trackUri, commandId, activeCommandId: this.playbackCommandId }, "Skipping stale Spotify source recovery");
+      return;
+    }
+
+    await this.play(song, player, onEnd);
+  }
+
   private ensureEncodedGate(): OggSyncGate {
     if (this.encodedGate) {
       return this.encodedGate;
@@ -680,7 +774,11 @@ export class SpotifyPlaybackEngine {
     return gate;
   }
 
-  private startEncodedPlayer(player: AudioPlayer, cleanup = this.createPlaybackCleanup()): void {
+  private startEncodedPlayer(
+    player: AudioPlayer,
+    cleanup = this.createPlaybackCleanup(),
+    onSourceFailure?: (err: Error) => void | Promise<void>,
+  ): void {
     const gate = this.ensureEncodedGate();
     gate.syncToNextLogicalStream("spotify-encoded-start");
     this.logger.info({ gateStats: gate.getStats() }, "Spotify encoded gate waiting for next Ogg stream");
@@ -688,6 +786,7 @@ export class SpotifyPlaybackEngine {
       inputFormat: "ogg",
       cleanup,
       suppressTrackEnd: true,
+      onSourceFailure,
     });
     this.attachedPlayer = player;
     this.streamAttached = true;
@@ -749,12 +848,17 @@ export class SpotifyPlaybackEngine {
     return gate;
   }
 
-  private startPcmPlayer(player: AudioPlayer, cleanup = this.createPlaybackCleanup()): void {
+  private startPcmPlayer(
+    player: AudioPlayer,
+    cleanup = this.createPlaybackCleanup(),
+    onSourceFailure?: (err: Error) => void | Promise<void>,
+  ): void {
     const gate = this.ensurePcmGate();
     player.playPcmStream(gate, {
       inputSampleRate: 44100,
       cleanup,
       suppressTrackEnd: true,
+      onSourceFailure,
     });
     this.attachedPlayer = player;
     this.streamAttached = true;
