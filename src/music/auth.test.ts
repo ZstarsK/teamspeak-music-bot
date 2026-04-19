@@ -39,4 +39,36 @@ describe("cookie store", () => {
     expect(store.getQQPrimaryId()).toBe(accountB.id);
     expect(store.load("qq")).toBe(qqCookieB);
   });
+
+  it("stores multiple NetEase accounts and switches primary account", () => {
+    const store = createCookieStore(makeDir());
+    const accountA = store.saveNeteaseAccount({
+      uid: "1001",
+      cookie: "MUSIC_U=aaa;",
+      nickname: "Alice",
+      avatarUrl: "https://example.com/a.png",
+    }, true);
+    const accountB = store.saveNeteaseAccount({
+      uid: "1002",
+      cookie: "MUSIC_U=bbb;",
+      nickname: "Bob",
+      avatarUrl: "https://example.com/b.png",
+    }, false);
+
+    expect(store.loadNeteaseAccounts().map((entry) => entry.id)).toEqual([
+      accountA.id,
+      accountB.id,
+    ]);
+    expect(store.getNeteasePrimaryId()).toBe(accountA.id);
+    expect(store.load("netease")).toBe("MUSIC_U=aaa;");
+
+    expect(store.setNeteasePrimary(accountB.id)).toBe(true);
+    expect(store.getNeteasePrimaryId()).toBe(accountB.id);
+    expect(store.load("netease")).toBe("MUSIC_U=bbb;");
+
+    expect(store.removeNeteaseAccount(accountB.id)).toBe(true);
+    expect(store.loadNeteaseAccounts().map((entry) => entry.id)).toEqual([
+      accountA.id,
+    ]);
+  });
 });

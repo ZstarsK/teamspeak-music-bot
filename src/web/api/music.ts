@@ -1,11 +1,12 @@
 import { Router } from "express";
 import type { MusicProvider } from "../../music/provider.js";
+import { NeteaseProvider } from "../../music/netease.js";
 import { QQMusicProvider } from "../../music/qq.js";
 import { YouTubeProvider } from "../../music/youtube.js";
 import type { Logger } from "../../logger.js";
 
 export function createMusicRouter(
-  neteaseProvider: MusicProvider,
+  neteaseProvider: NeteaseProvider,
   qqProvider: QQMusicProvider,
   bilibiliProvider: MusicProvider,
   logger: Logger
@@ -88,6 +89,8 @@ export function createMusicRouter(
       const provider = getProvider(platform);
       const songs = platform === "qq"
         ? await qqProvider.getPlaylistSongsForAccount(req.params.id, accountId)
+        : platform === "netease"
+          ? await neteaseProvider.getPlaylistSongsForAccount(req.params.id, accountId)
         : await provider.getPlaylistSongs(req.params.id);
       res.json({ songs });
     } catch (err) {
@@ -188,6 +191,12 @@ export function createMusicRouter(
       const provider = getProvider(platform);
       if (platform === "qq") {
         const playlist = await qqProvider.getPlaylistDetailForAccount(req.params.id, accountId);
+        if (playlist) {
+          res.json({ playlist });
+          return;
+        }
+      } else if (platform === "netease") {
+        const playlist = await neteaseProvider.getPlaylistDetailForAccount(req.params.id, accountId);
         if (playlist) {
           res.json({ playlist });
           return;

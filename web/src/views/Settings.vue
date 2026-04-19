@@ -234,6 +234,47 @@
           />
           <button class="btn-primary btn-save" @click="saveCookie('netease')">保存Cookie</button>
         </div>
+
+        <div v-if="neteaseAccounts.length > 0" class="linked-accounts">
+          <div class="linked-accounts-title">已登录账号</div>
+          <div
+            v-for="account in neteaseAccounts"
+            :key="account.id"
+            class="linked-account-item"
+          >
+            <img
+              v-if="account.avatarUrl"
+              :src="account.avatarUrl"
+              alt=""
+              class="linked-account-avatar"
+            />
+            <div v-else class="linked-account-avatar linked-account-avatar--placeholder">网</div>
+            <div class="linked-account-meta">
+              <div class="linked-account-name">{{ account.name }}</div>
+              <div
+                class="linked-account-subtitle"
+                :class="{ invalid: account.valid === false }"
+              >
+                {{ account.primary ? '主账号' : '附加账号' }} · {{ account.valid === false ? '已失效' : '有效' }}
+              </div>
+            </div>
+            <div class="linked-account-actions">
+              <button
+                class="btn-sm"
+                :disabled="account.primary"
+                @click="setPrimaryNeteaseAccount(account.id)"
+              >
+                {{ account.primary ? '当前主账号' : '设为主账号' }}
+              </button>
+              <button
+                class="btn-sm btn-delete"
+                @click="removeAccount('netease', account.id, account.name)"
+              >
+                删除
+              </button>
+            </div>
+          </div>
+        </div>
       </div>
 
       <!-- QQ Music -->
@@ -321,17 +362,28 @@
             <div v-else class="linked-account-avatar linked-account-avatar--placeholder">Q</div>
             <div class="linked-account-meta">
               <div class="linked-account-name">{{ account.name }}</div>
-              <div class="linked-account-subtitle">
-                {{ account.primary ? '主账号' : '附加账号' }}
+              <div
+                class="linked-account-subtitle"
+                :class="{ invalid: account.valid === false }"
+              >
+                {{ account.primary ? '主账号' : '附加账号' }} · {{ account.valid === false ? '已失效' : '有效' }}
               </div>
             </div>
-            <button
-              class="btn-sm"
-              :disabled="account.primary"
-              @click="setPrimaryQqAccount(account.id)"
-            >
-              {{ account.primary ? '当前主账号' : '设为主账号' }}
-            </button>
+            <div class="linked-account-actions">
+              <button
+                class="btn-sm"
+                :disabled="account.primary"
+                @click="setPrimaryQqAccount(account.id)"
+              >
+                {{ account.primary ? '当前主账号' : '设为主账号' }}
+              </button>
+              <button
+                class="btn-sm btn-delete"
+                @click="removeAccount('qq', account.id, account.name)"
+              >
+                删除
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -556,13 +608,16 @@ const bilibiliLoginMode = ref<'qr' | 'cookie' | null>(null);
 const neteaseAuth = reactive({ loggedIn: false, nickname: '', avatarUrl: '' });
 const qqAuth = reactive({ loggedIn: false, nickname: '', avatarUrl: '' });
 const bilibiliAuth = reactive({ loggedIn: false, nickname: '', avatarUrl: '' });
-const qqAccounts = ref<Array<{
+type ManagedAccount = {
   id: string;
   name: string;
   platform: string;
   avatarUrl?: string;
   primary: boolean;
-}>>([]);
+  valid?: boolean;
+};
+const neteaseAccounts = ref<ManagedAccount[]>([]);
+const qqAccounts = ref<ManagedAccount[]>([]);
 
 // QR state
 interface QrState {
@@ -612,12 +667,50 @@ async function loadQqAccounts() {
   }
 }
 
+async function loadNeteaseAccounts() {
+  try {
+    const res = await axios.get('/api/auth/accounts', { params: { platform: 'netease' } });
+    neteaseAccounts.value = res.data.accounts ?? [];
+  } catch {
+    neteaseAccounts.value = [];
+  }
+}
+
 async function setPrimaryQqAccount(accountId: string) {
   try {
     await axios.post('/api/auth/accounts/primary', { platform: 'qq', accountId });
     await Promise.all([
       checkAuthStatus(),
       loadQqAccounts(),
+    ]);
+    store.lastFetchTime = 0;
+  } catch {
+    // Ignore
+  }
+}
+
+async function setPrimaryNeteaseAccount(accountId: string) {
+  try {
+    await axios.post('/api/auth/accounts/primary', { platform: 'netease', accountId });
+    await Promise.all([
+      checkAuthStatus(),
+      loadNeteaseAccounts(),
+    ]);
+    store.lastFetchTime = 0;
+  } catch {
+    // Ignore
+  }
+}
+
+async function removeAccount(platform: 'netease' | 'qq', accountId: string, accountName: string) {
+  if (!confirm(`确认删除账号 "${accountName}"？`)) return;
+  try {
+    await axios.delete('/api/auth/accounts', {
+      data: { platform, accountId },
+    });
+    await Promise.all([
+      checkAuthStatus(),
+      platform === 'qq' ? loadQqAccounts() : loadNeteaseAccounts(),
     ]);
     store.lastFetchTime = 0;
   } catch {
@@ -682,6 +775,7 @@ async function pollQrStatus(platform: string) {
       // Refresh auth status
       await Promise.all([
         checkAuthStatus(),
+        platform === 'netease' ? loadNeteaseAccounts() : Promise.resolve(),
         platform === 'qq' ? loadQqAccounts() : Promise.resolve(),
       ]);
       store.lastFetchTime = 0;
@@ -793,6 +887,7 @@ async function saveCookie(platform: string) {
     await axios.post('/api/auth/cookie', { platform, cookie });
     await Promise.all([
       checkAuthStatus(),
+      platform === 'netease' ? loadNeteaseAccounts() : Promise.resolve(),
       platform === 'qq' ? loadQqAccounts() : Promise.resolve(),
     ]);
     store.lastFetchTime = 0;
@@ -826,6 +921,7 @@ async function saveBotSettings() {
 onMounted(() => {
   store.fetchBots(); // Refresh bot status on page visit
   checkAuthStatus();
+  loadNeteaseAccounts();
   loadQqAccounts();
   loadQuality();
   loadBotSettings();
@@ -1072,6 +1168,16 @@ onUnmounted(() => {
   margin-top: 2px;
   font-size: 12px;
   color: var(--text-tertiary);
+
+  &.invalid {
+    color: #ef5350;
+  }
+}
+
+.linked-account-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .login-methods {

@@ -46,8 +46,34 @@ async function main() {
   const bilibiliProvider = new BiliBiliProvider();
 
   const cookieStore = createCookieStore(COOKIE_DIR);
-  const neteaseCookie = cookieStore.load("netease");
-  if (neteaseCookie) neteaseProvider.setCookie(neteaseCookie);
+  const neteaseAccounts = cookieStore.loadNeteaseAccounts();
+  if (neteaseAccounts.length > 0) {
+    neteaseProvider.loadAccounts(
+      neteaseAccounts.map((account) => ({
+        id: account.id,
+        uid: account.uid,
+        cookie: account.cookie,
+        nickname: account.nickname,
+        avatarUrl: account.avatarUrl,
+      })),
+      cookieStore.getNeteasePrimaryId(),
+    );
+  } else {
+    const neteaseCookie = cookieStore.load("netease");
+    if (neteaseCookie) {
+      const account = await neteaseProvider.upsertAccountFromCookie(neteaseCookie, true);
+      if (account) {
+        cookieStore.saveNeteaseAccount({
+          uid: account.uid,
+          cookie: account.cookie,
+          nickname: account.nickname,
+          avatarUrl: account.avatarUrl,
+        }, true);
+      } else {
+        neteaseProvider.setCookie(neteaseCookie);
+      }
+    }
+  }
   const qqAccounts = cookieStore.loadQQAccounts();
   if (qqAccounts.length > 0) {
     qqProvider.loadAccounts(

@@ -3,10 +3,11 @@ import type { MusicProvider } from "../../music/provider.js";
 import { YouTubeProvider } from "../../music/youtube.js";
 import type { CookieStore } from "../../music/auth.js";
 import { QQMusicProvider } from "../../music/qq.js";
+import { NeteaseProvider } from "../../music/netease.js";
 import type { Logger } from "../../logger.js";
 
 export function createAuthRouter(
-  neteaseProvider: MusicProvider,
+  neteaseProvider: NeteaseProvider,
   qqProvider: QQMusicProvider,
   bilibiliProvider: MusicProvider,
   logger: Logger,
@@ -23,6 +24,38 @@ export function createAuthRouter(
     return platform === "qq" ? qqProvider : neteaseProvider;
   }
 
+  function getAccountProvider(platform?: string): NeteaseProvider | QQMusicProvider | null {
+    if (platform === "qq") return qqProvider;
+    if (platform === "netease") return neteaseProvider;
+    return null;
+  }
+
+  async function persistCookieForPlatform(
+    platform: "netease" | "qq" | "bilibili",
+    cookie: string
+  ): Promise<void> {
+    if (!cookieStore || !cookie) return;
+    if (platform === "qq") {
+      cookieStore.saveQQAccount(cookie, true);
+      return;
+    }
+    if (platform === "netease") {
+      const account = await neteaseProvider.upsertAccountFromCookie(cookie, true);
+      if (account) {
+        cookieStore.saveNeteaseAccount({
+          uid: account.uid,
+          cookie: account.cookie,
+          nickname: account.nickname,
+          avatarUrl: account.avatarUrl,
+        }, true);
+      } else {
+        cookieStore.save("netease", cookie);
+      }
+      return;
+    }
+    cookieStore.save(platform, cookie);
+  }
+
   router.get("/status", async (req, res) => {
     try {
       const platform = req.query.platform as string;
@@ -36,42 +69,81 @@ export function createAuthRouter(
     }
   });
 
-  router.get("/accounts", (req, res) => {
+  router.get("/accounts", async (req, res) => {
     const platform = req.query.platform as string;
-    if (platform !== "qq") {
-      res.status(400).json({ error: "Only QQ accounts are supported here" });
+    const provider = getAccountProvider(platform);
+    if (!provider) {
+      res.status(400).json({ error: "Only NetEase and QQ accounts are supported here" });
       return;
     }
+    const accounts = await provider.getAccountsWithStatus();
     res.json({
-      platform: "qq",
-      primaryAccountId: qqProvider.getPrimaryAccountId(),
-      accounts: qqProvider.getAccounts(),
+      platform,
+      primaryAccountId: provider.getPrimaryAccountId(),
+      accounts,
     });
   });
 
   router.post("/accounts/primary", (req, res) => {
     const { platform, accountId } = req.body ?? {};
-    if (platform !== "qq") {
-      res.status(400).json({ error: "Only QQ accounts are supported here" });
+    const provider = getAccountProvider(platform);
+    if (!provider) {
+      res.status(400).json({ error: "Only NetEase and QQ accounts are supported here" });
       return;
     }
     if (typeof accountId !== "string" || !accountId) {
       res.status(400).json({ error: "accountId is required" });
       return;
     }
-    if (!qqProvider.getAccounts().some((account) => account.id === accountId)) {
-      res.status(404).json({ error: "QQ account not found" });
+    if (!provider.getAccounts().some((account) => account.id === accountId)) {
+      res.status(404).json({ error: "Account not found" });
       return;
     }
-    if (cookieStore && !cookieStore.setQQPrimary(accountId)) {
-      res.status(404).json({ error: "QQ account not found in cookie store" });
-      return;
+    if (cookieStore) {
+      const ok = platform === "qq"
+        ? cookieStore.setQQPrimary(accountId)
+        : cookieStore.setNeteasePrimary(accountId);
+      if (!ok) {
+        res.status(404).json({ error: "Account not found in cookie store" });
+        return;
+      }
     }
-    qqProvider.setPrimaryAccount(accountId);
+    provider.setPrimaryAccount(accountId);
     res.json({
       success: true,
-      primaryAccountId: qqProvider.getPrimaryAccountId(),
-      accounts: qqProvider.getAccounts(),
+      primaryAccountId: provider.getPrimaryAccountId(),
+      accounts: provider.getAccounts(),
+    });
+  });
+
+  router.delete("/accounts", (req, res) => {
+    const { platform, accountId } = req.body ?? {};
+    const provider = getAccountProvider(platform);
+    if (!provider) {
+      res.status(400).json({ error: "Only NetEase and QQ accounts are supported here" });
+      return;
+    }
+    if (typeof accountId !== "string" || !accountId) {
+      res.status(400).json({ error: "accountId is required" });
+      return;
+    }
+    if (cookieStore) {
+      const ok = platform === "qq"
+        ? cookieStore.removeQQAccount(accountId)
+        : cookieStore.removeNeteaseAccount(accountId);
+      if (!ok) {
+        res.status(404).json({ error: "Account not found in cookie store" });
+        return;
+      }
+    }
+    if (!provider.removeAccount(accountId)) {
+      res.status(404).json({ error: "Account not found" });
+      return;
+    }
+    res.json({
+      success: true,
+      primaryAccountId: provider.getPrimaryAccountId(),
+      accounts: provider.getAccounts(),
     });
   });
 
@@ -105,11 +177,7 @@ export function createAuthRouter(
         const plat = (platform as string) === "bilibili" ? "bilibili" as const
           : (platform as string) === "qq" ? "qq" as const : "netease" as const;
         if (cookie && cookieStore) {
-          if (plat === "qq") {
-            cookieStore.saveQQAccount(cookie, true);
-          } else {
-            cookieStore.save(plat, cookie);
-          }
+          await persistCookieForPlatform(plat, cookie);
           logger.info({ platform: plat }, "Cookie persisted to disk");
         }
       }
@@ -154,7 +222,7 @@ export function createAuthRouter(
       }
       const success = await neteaseProvider.loginWithSms(phone, code);
       if (success && cookieStore) {
-        cookieStore.save("netease", neteaseProvider.getCookie());
+        await persistCookieForPlatform("netease", neteaseProvider.getCookie());
       }
       res.json({ success });
     } catch (err) {
@@ -162,7 +230,7 @@ export function createAuthRouter(
     }
   });
 
-  router.post("/cookie", (req, res) => {
+  router.post("/cookie", async (req, res) => {
     const { platform, cookie } = req.body;
     if (!cookie) {
       res.status(400).json({ error: "cookie is required" });
@@ -181,11 +249,7 @@ export function createAuthRouter(
     const plat = platform === "bilibili" ? "bilibili" as const
       : platform === "qq" ? "qq" as const : "netease" as const;
     if (cookieStore) {
-      if (plat === "qq") {
-        cookieStore.saveQQAccount(cookie, true);
-      } else {
-        cookieStore.save(plat, cookie);
-      }
+      await persistCookieForPlatform(plat, cookie);
     }
     res.json({ success: true });
   });

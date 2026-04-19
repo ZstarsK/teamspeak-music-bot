@@ -8,13 +8,36 @@ export interface StoredQQAccount {
   updatedAt: string;
 }
 
+export interface StoredNeteaseAccount {
+  id: string;
+  uid: string;
+  cookie: string;
+  nickname?: string;
+  avatarUrl?: string;
+  updatedAt: string;
+}
+
 export interface CookieStore {
   save(platform: "netease" | "qq" | "bilibili", cookie: string): void;
   load(platform: "netease" | "qq" | "bilibili"): string;
+  saveNeteaseAccount(
+    account: {
+      uid: string;
+      cookie: string;
+      nickname?: string;
+      avatarUrl?: string;
+    },
+    makePrimary?: boolean
+  ): StoredNeteaseAccount;
+  loadNeteaseAccounts(): StoredNeteaseAccount[];
+  getNeteasePrimaryId(): string | null;
+  setNeteasePrimary(accountId: string): boolean;
+  removeNeteaseAccount(accountId: string): boolean;
   saveQQAccount(cookie: string, makePrimary?: boolean): StoredQQAccount | null;
   loadQQAccounts(): StoredQQAccount[];
   getQQPrimaryId(): string | null;
   setQQPrimary(accountId: string): boolean;
+  removeQQAccount(accountId: string): boolean;
 }
 
 export function createCookieStore(cookieDir: string): CookieStore {
@@ -28,6 +51,67 @@ export function createCookieStore(cookieDir: string): CookieStore {
   };
 
   const qqFilePath = path.join(cookieDir, "qq.json");
+  const neteaseFilePath = path.join(cookieDir, "netease.json");
+
+  const readNeteaseState = (): {
+    primaryId: string | null;
+    accounts: StoredNeteaseAccount[];
+    legacyCookie: string;
+  } => {
+    if (!fs.existsSync(neteaseFilePath)) {
+      return { primaryId: null, accounts: [], legacyCookie: "" };
+    }
+    try {
+      const raw = JSON.parse(fs.readFileSync(neteaseFilePath, "utf-8"));
+      if (typeof raw?.cookie === "string" && !Array.isArray(raw?.accounts)) {
+        return {
+          primaryId: null,
+          accounts: [],
+          legacyCookie: raw.cookie,
+        };
+      }
+      const accounts: StoredNeteaseAccount[] = Array.isArray(raw?.accounts)
+        ? raw.accounts
+            .map((entry: any) => {
+              const uid = typeof entry?.uid === "string" && entry.uid
+                ? entry.uid
+                : typeof entry?.id === "string"
+                  ? String(entry.id).replace(/^netease:/, "")
+                  : "";
+              const cookie = typeof entry?.cookie === "string" ? entry.cookie : "";
+              if (!uid || !cookie) return null;
+              return {
+                id: typeof entry?.id === "string" && entry.id ? entry.id : `netease:${uid}`,
+                uid,
+                cookie,
+                nickname: typeof entry?.nickname === "string" ? entry.nickname : undefined,
+                avatarUrl: typeof entry?.avatarUrl === "string" ? entry.avatarUrl : undefined,
+                updatedAt: typeof entry?.updatedAt === "string"
+                  ? entry.updatedAt
+                  : new Date().toISOString(),
+              } satisfies StoredNeteaseAccount;
+            })
+            .filter((entry: StoredNeteaseAccount | null): entry is StoredNeteaseAccount => entry !== null)
+        : [];
+      const primaryId = typeof raw?.primaryId === "string" && accounts.some((entry: StoredNeteaseAccount) => entry.id === raw.primaryId)
+        ? raw.primaryId
+        : accounts[0]?.id ?? null;
+      return { primaryId, accounts, legacyCookie: "" };
+    } catch {
+      return { primaryId: null, accounts: [], legacyCookie: "" };
+    }
+  };
+
+  const writeNeteaseState = (state: {
+    primaryId: string | null;
+    accounts: StoredNeteaseAccount[];
+  }): void => {
+    fs.writeFileSync(
+      neteaseFilePath,
+      JSON.stringify(state, null, 2),
+      { encoding: "utf-8", mode: 0o600 },
+    );
+  };
 
   const readQQState = (): { primaryId: string | null; accounts: StoredQQAccount[] } => {
     if (!fs.existsSync(qqFilePath)) {
@@ -99,6 +183,14 @@ export function createCookieStore(cookieDir: string): CookieStore {
     },
 
     load(platform: "netease" | "qq" | "bilibili"): string {
+      if (platform === "netease") {
+        const { primaryId, accounts, legacyCookie } = readNeteaseState();
+        if (accounts.length === 0) {
+          return legacyCookie;
+        }
+        const primary = accounts.find((entry) => entry.id === primaryId) ?? accounts[0];
+        return primary?.cookie ?? "";
+      }
       if (platform === "qq") {
         const { primaryId, accounts } = readQQState();
         const primary = accounts.find((entry) => entry.id === primaryId) ?? accounts[0];
@@ -112,6 +204,63 @@ export function createCookieStore(cookieDir: string): CookieStore {
       } catch {
         return "";
       }
+    },
+
+    saveNeteaseAccount(
+      account: {
+        uid: string;
+        cookie: string;
+        nickname?: string;
+        avatarUrl?: string;
+      },
+      makePrimary = true,
+    ): StoredNeteaseAccount {
+      const state = readNeteaseState();
+      const nextAccount: StoredNeteaseAccount = {
+        id: `netease:${account.uid}`,
+        uid: account.uid,
+        cookie: account.cookie,
+        nickname: account.nickname,
+        avatarUrl: account.avatarUrl,
+        updatedAt: new Date().toISOString(),
+      };
+      const nextAccounts = state.accounts.filter((entry) => entry.id !== nextAccount.id);
+      nextAccounts.push(nextAccount);
+      writeNeteaseState({
+        primaryId: makePrimary || !state.primaryId ? nextAccount.id : state.primaryId,
+        accounts: nextAccounts,
+      });
+      return nextAccount;
+    },
+
+    loadNeteaseAccounts(): StoredNeteaseAccount[] {
+      return readNeteaseState().accounts;
+    },
+
+    getNeteasePrimaryId(): string | null {
+      return readNeteaseState().primaryId;
+    },
+
+    setNeteasePrimary(accountId: string): boolean {
+      const state = readNeteaseState();
+      if (!state.accounts.some((entry) => entry.id === accountId)) {
+        return false;
+      }
+      writeNeteaseState({ ...state, primaryId: accountId });
+      return true;
+    },
+
+    removeNeteaseAccount(accountId: string): boolean {
+      const state = readNeteaseState();
+      if (!state.accounts.some((entry) => entry.id === accountId)) {
+        return false;
+      }
+      const accounts = state.accounts.filter((entry) => entry.id !== accountId);
+      writeNeteaseState({
+        primaryId: state.primaryId === accountId ? (accounts[0]?.id ?? null) : state.primaryId,
+        accounts,
+      });
+      return true;
     },
 
     saveQQAccount(cookie: string, makePrimary = true): StoredQQAccount | null {
@@ -147,6 +296,19 @@ export function createCookieStore(cookieDir: string): CookieStore {
         return false;
       }
       writeQQState({ ...state, primaryId: accountId });
+      return true;
+    },
+
+    removeQQAccount(accountId: string): boolean {
+      const state = readQQState();
+      if (!state.accounts.some((entry) => entry.id === accountId)) {
+        return false;
+      }
+      const accounts = state.accounts.filter((entry) => entry.id !== accountId);
+      writeQQState({
+        primaryId: state.primaryId === accountId ? (accounts[0]?.id ?? null) : state.primaryId,
+        accounts,
+      });
       return true;
     },
   };

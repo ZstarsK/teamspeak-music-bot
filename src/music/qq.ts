@@ -71,6 +71,22 @@ export class QQMusicProvider implements MusicProvider {
     };
   }
 
+  private async validateAccount(accountId?: string): Promise<boolean> {
+    const cookie = this.getCookieForAccount(accountId);
+    if (!cookie) return false;
+    const uinMatch = /(?:^|; )uin=o?0?(\d+)/.exec(cookie);
+    const uin = uinMatch ? uinMatch[1] : "";
+    if (!uin) return false;
+    try {
+      const res = await this.api.get("/user/getUserPlaylists", {
+        params: { uin, ...this.getCookieParams(accountId) },
+      });
+      return res.data?.response?.code === 0;
+    } catch {
+      return false;
+    }
+  }
+
   private mapSong(s: any, accountId?: string): Song {
     const id = String(s.songmid ?? s.mid ?? s.songMid ?? s.id ?? s.songid ?? "");
     const albumMid = s.albummid ?? s.album?.mid ?? s.album?.pmid ?? "";
@@ -322,37 +338,45 @@ export class QQMusicProvider implements MusicProvider {
       }));
   }
 
+  async getAccountsWithStatus(): Promise<Array<MusicAccount & { primary: boolean; valid: boolean }>> {
+    const accounts = this.getAccounts();
+    const validity = await Promise.all(
+      accounts.map(async (account) => ({
+        id: account.id,
+        valid: await this.validateAccount(account.id),
+      }))
+    );
+    const validityMap = new Map(validity.map((entry) => [entry.id, entry.valid]));
+    return accounts.map((account) => ({
+      ...account,
+      valid: validityMap.get(account.id) ?? false,
+    }));
+  }
+
+  removeAccount(accountId: string): boolean {
+    if (!this.accounts.has(accountId)) return false;
+    this.accounts.delete(accountId);
+    if (this.primaryAccountId === accountId) {
+      this.primaryAccountId = this.accounts.keys().next().value ?? null;
+    }
+    return true;
+  }
+
   async getAuthStatus(): Promise<AuthStatus> {
-    const cookie = this.getCookieForAccount();
+    const resolvedAccountId = this.getResolvedAccountId();
+    const cookie = this.getCookieForAccount(resolvedAccountId ?? undefined);
     if (!cookie) return { loggedIn: false };
-    // /getUserAvatar in @sansenjian/qq-music-api 2.x is NOT registered on
-    // the main router; the real endpoint is /user/getUserAvatar, and even
-    // that just builds a static URL from a uin without validating the
-    // cookie against QQ. Round-trip through /user/getUserPlaylists which
-    // actually hits QQ Music with the cookie; if the upstream returns
-    // code=0, the cookie is valid.
-    //
-    // IMPORTANT: /user/getUserPlaylists requires `uin` as a query param —
-    // the library 400s with "缺少 uin 参数" otherwise. Parse it out of the
-    // cookie (uin=<qq>; comes after the various *uin prefixed names, which
-    // is why the regex anchors on a word boundary).
     const uinMatch = /(?:^|; )uin=o?0?(\d+)/.exec(cookie);
     const uin = uinMatch ? uinMatch[1] : "";
     if (!uin) return { loggedIn: false };
-    try {
-      const resolvedAccountId = this.getResolvedAccountId() ?? undefined;
-      const res = await this.api.get("/user/getUserPlaylists", {
-        params: { uin, ...this.getCookieParams(resolvedAccountId) },
-      });
-      if (res.data?.response?.code !== 0) return { loggedIn: false };
-      return {
-        loggedIn: true,
-        nickname: `QQ ${uin}`,
-        avatarUrl: `https://q.qlogo.cn/headimg_dl?dst_uin=${uin}&spec=100`,
-      };
-    } catch {
+    if (!(await this.validateAccount(resolvedAccountId ?? undefined))) {
       return { loggedIn: false };
     }
+    return {
+      loggedIn: true,
+      nickname: `QQ ${uin}`,
+      avatarUrl: `https://q.qlogo.cn/headimg_dl?dst_uin=${uin}&spec=100`,
+    };
   }
 
   async getUserPlaylists(): Promise<Playlist[]> {

@@ -285,7 +285,10 @@ export function createPlayerRouter(
       bot.getPlayer().stop();
       bot.getPlayer().resetFailures();
 
-      const songs = platform === "qq" && typeof accountId === "string" && "getPlaylistSongsForAccount" in provider
+      const songs = typeof accountId === "string" &&
+        accountId &&
+        "getPlaylistSongsForAccount" in provider &&
+        typeof (provider as any).getPlaylistSongsForAccount === "function"
         ? await (provider as any).getPlaylistSongsForAccount(playlistId, accountId)
         : await provider.getPlaylistSongs(playlistId);
       if (songs.length === 0) {
