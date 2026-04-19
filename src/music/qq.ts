@@ -12,6 +12,22 @@ import type {
 } from "./provider.js";
 import { parseLyrics } from "./netease.js";
 
+interface QQMusicApiSearchModule {
+  default?: {
+    getSearchByKey?: (params: any) => Promise<any>;
+    getSmartbox?: (params: any) => Promise<any>;
+  };
+  getSearchByKey?: (params: any) => Promise<any>;
+  getSmartbox?: (params: any) => Promise<any>;
+}
+
+let qqMusicApiSearchModulePromise: Promise<QQMusicApiSearchModule> | null = null;
+
+function loadQQMusicApiSearchModule(): Promise<QQMusicApiSearchModule> {
+  qqMusicApiSearchModulePromise ??= import("@sansenjian/qq-music-api/dist/module/index.js") as Promise<QQMusicApiSearchModule>;
+  return qqMusicApiSearchModulePromise;
+}
+
 export class QQMusicProvider implements MusicProvider {
   readonly platform = "qq" as const;
   private api: AxiosInstance;
@@ -106,19 +122,115 @@ export class QQMusicProvider implements MusicProvider {
     };
   }
 
-  async search(query: string, limit = 20): Promise<SearchResult> {
-    const res = await this.api.get("/getSearchByKey", {
-      params: { key: query, pageSize: limit, limit, ...this.getCookieParams() },
-    });
+  private mapSmartboxSong(s: any): Song {
+    return {
+      id: String(s.mid ?? s.songmid ?? s.id ?? ""),
+      name: s.name ?? s.songname ?? "",
+      artist: s.singer ?? s.singername ?? "",
+      album: s.albumname ?? "",
+      duration: Number(s.interval ?? 0) || 0,
+      coverUrl: s.pic ?? "",
+      platform: "qq",
+    };
+  }
 
-    const songs: Song[] = (res.data?.response?.data?.song?.list
-      ?? res.data?.data?.song?.list
-      ?? res.data?.data?.list
-      ?? [])
+  protected async loadEmbeddedSearchModule(): Promise<QQMusicApiSearchModule> {
+    return loadQQMusicApiSearchModule();
+  }
+
+  private extractSearchSongs(payload: any): Song[] {
+    const list = payload?.response?.data?.song?.list
+      ?? payload?.data?.song?.list
+      ?? payload?.data?.list
+      ?? [];
+    return list
       .map((s: any) => this.mapSong(s))
       .filter((s: Song) => s.id);
+  }
 
-    return { songs, playlists: [], albums: [] };
+  private extractSmartboxSongs(payload: any): Song[] {
+    const list = payload?.response?.data?.song?.itemlist
+      ?? payload?.response?.data?.result?.songList
+      ?? payload?.data?.song?.itemlist
+      ?? payload?.data?.result?.songList
+      ?? [];
+    return list
+      .map((s: any) => this.mapSmartboxSong(s))
+      .filter((s: Song) => s.id);
+  }
+
+  private async searchViaEmbeddedModule(query: string, limit: number): Promise<Song[]> {
+    const mod = await this.loadEmbeddedSearchModule();
+    const getSearchByKey = mod.getSearchByKey ?? mod.default?.getSearchByKey;
+    const getSmartbox = mod.getSmartbox ?? mod.default?.getSmartbox;
+
+    if (typeof getSearchByKey === "function") {
+      try {
+        const res = await getSearchByKey({
+          method: "get",
+          params: {
+            w: query,
+            n: limit,
+            p: 1,
+            catZhida: 1,
+            remoteplace: "txt.yqq.song",
+          },
+          option: {},
+        });
+        const songs = this.extractSearchSongs(res?.body ?? res);
+        if (songs.length > 0) return songs;
+      } catch {
+        // fall through to smartbox fallback
+      }
+    }
+
+    if (typeof getSmartbox === "function") {
+      const res = await getSmartbox({
+        method: "get",
+        params: { key: query },
+        option: {},
+      });
+      return this.extractSmartboxSongs(res?.body ?? res).slice(0, limit);
+    }
+
+    return [];
+  }
+
+  private async searchViaApiServer(query: string, limit: number): Promise<Song[]> {
+    const res = await this.api.get("/getSearchByKey", {
+      params: {
+        key: query,
+        page: 1,
+        limit,
+        catZhida: 1,
+        remoteplace: "song",
+      },
+    });
+
+    const songs = this.extractSearchSongs(res.data);
+    if (songs.length > 0) return songs;
+
+    const smartboxRes = await this.api.get("/getSmartbox", {
+      params: { key: query },
+    });
+    return this.extractSmartboxSongs(smartboxRes.data).slice(0, limit);
+  }
+
+  async search(query: string, limit = 20): Promise<SearchResult> {
+    const keyword = query.trim();
+    if (!keyword) return { songs: [], playlists: [], albums: [] };
+
+    try {
+      const songs = await this.searchViaEmbeddedModule(keyword, limit);
+      return { songs, playlists: [], albums: [] };
+    } catch {
+      try {
+        const songs = await this.searchViaApiServer(keyword, limit);
+        return { songs, playlists: [], albums: [] };
+      } catch {
+        return { songs: [], playlists: [], albums: [] };
+      }
+    }
   }
 
   async getSongUrl(songId: string, _quality?: string, song?: Song): Promise<string | null> {

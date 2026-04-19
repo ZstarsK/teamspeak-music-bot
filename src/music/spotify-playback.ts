@@ -83,7 +83,7 @@ export function shouldReuseSpotifyStreamForTrackSwitch(params: {
   playerState: "idle" | "playing" | "paused";
   outputMode: "pcm" | "encoded";
 }): boolean {
-  return params.outputMode === "encoded" && params.sameProcess && params.playerState !== "idle";
+  return params.sameProcess && params.playerState !== "idle";
 }
 
 function directoryHasFiles(dir: string): boolean {
@@ -172,7 +172,13 @@ export class SpotifyPlaybackEngine {
     if (!reusingStream) {
       this.attachPlayerToStream(player);
     } else if (this.currentOutputMode === "pcm") {
-      await this.preparePcmBoundary(player, 0);
+      await this.withTransition(async () => {
+        await this.preparePcmBoundary(player, 0);
+      });
+      this.logger.info(
+        { deviceId: this.activeDeviceId, fromTrackUri: this.activeTrackUri, toTrackUri: trackUri, playerState },
+        "Reusing existing Spotify PCM stream",
+      );
     } else {
       this.logger.info(
         { deviceId: this.activeDeviceId, trackUri: this.activeTrackUri, playerState },
@@ -226,8 +232,8 @@ export class SpotifyPlaybackEngine {
       return;
     }
     if (this.currentOutputMode === "pcm") {
-      await this.preparePcmBoundary(player, targetSeconds);
       await this.withTransition(async () => {
+        await this.preparePcmBoundary(player, targetSeconds);
         await this.provider.seekPlayback(targetSeconds * 1000, this.activeAccountId!, this.activeDeviceId);
       });
       player.resume();

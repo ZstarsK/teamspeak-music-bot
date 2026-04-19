@@ -71,7 +71,9 @@ describe("spotify librespot helpers", () => {
     expect(shouldReuseSpotifyStreamForTrackSwitch({ sameProcess: true, playerState: "playing", outputMode: "encoded" })).toBe(true);
     expect(shouldReuseSpotifyStreamForTrackSwitch({ sameProcess: true, playerState: "paused", outputMode: "encoded" })).toBe(true);
     expect(shouldReuseSpotifyStreamForTrackSwitch({ sameProcess: true, playerState: "idle", outputMode: "encoded" })).toBe(false);
-    expect(shouldReuseSpotifyStreamForTrackSwitch({ sameProcess: true, playerState: "playing", outputMode: "pcm" })).toBe(false);
+    expect(shouldReuseSpotifyStreamForTrackSwitch({ sameProcess: true, playerState: "playing", outputMode: "pcm" })).toBe(true);
+    expect(shouldReuseSpotifyStreamForTrackSwitch({ sameProcess: true, playerState: "paused", outputMode: "pcm" })).toBe(true);
+    expect(shouldReuseSpotifyStreamForTrackSwitch({ sameProcess: true, playerState: "idle", outputMode: "pcm" })).toBe(false);
     expect(shouldReuseSpotifyStreamForTrackSwitch({ sameProcess: false, playerState: "playing", outputMode: "encoded" })).toBe(false);
   });
 });
