@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildLibrespotArgs,
   getSpotifyLibrespotCachePaths,
-  shouldReuseSpotifyPcmStream,
+  shouldResetSpotifyPcmPipeline,
 } from "./spotify-playback.js";
 
 describe("spotify librespot helpers", () => {
@@ -47,10 +47,9 @@ describe("spotify librespot helpers", () => {
     expect(args[index + 1]).toBe("abc123");
   });
 
-  it("reuses the existing PCM stream only while the same spotify process is already playing", () => {
-    expect(shouldReuseSpotifyPcmStream({ sameProcess: true, playerState: "playing" })).toBe(true);
-    expect(shouldReuseSpotifyPcmStream({ sameProcess: true, playerState: "paused" })).toBe(false);
-    expect(shouldReuseSpotifyPcmStream({ sameProcess: true, playerState: "idle" })).toBe(false);
-    expect(shouldReuseSpotifyPcmStream({ sameProcess: false, playerState: "playing" })).toBe(false);
+  it("resets the PCM pipeline when switching tracks on the same active spotify process", () => {
+    expect(shouldResetSpotifyPcmPipeline({ sameProcess: true, playbackStarted: true })).toBe(true);
+    expect(shouldResetSpotifyPcmPipeline({ sameProcess: true, playbackStarted: false })).toBe(false);
+    expect(shouldResetSpotifyPcmPipeline({ sameProcess: false, playbackStarted: true })).toBe(false);
   });
 });

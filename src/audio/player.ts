@@ -510,14 +510,14 @@ export class AudioPlayer extends EventEmitter {
     }
   }
 
-  stop(): void {
+  stop(options: { skipCleanup?: boolean } = {}): void {
     this.sessionId++;
     this.frameLoopRunning = false;
     if (this.ffmpeg) {
       this.ffmpeg.kill("SIGTERM");
       this.ffmpeg = null;
     }
-    const cleanup = this.cleanupCurrentSource;
+    const cleanup = options.skipCleanup ? null : this.cleanupCurrentSource;
     this.cleanupCurrentSource = null;
     if (cleanup) {
       Promise.resolve()

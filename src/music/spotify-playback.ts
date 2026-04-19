@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import type { AudioPlayer, PlayerState } from "../audio/player.js";
+import type { AudioPlayer } from "../audio/player.js";
 import {
   getConfiguredSpotifyLibrespotAuthMode,
   type BotConfig,
@@ -75,11 +75,11 @@ export function buildLibrespotArgs(params: {
   return [...args, "--access-token", params.accessToken];
 }
 
-export function shouldReuseSpotifyPcmStream(params: {
+export function shouldResetSpotifyPcmPipeline(params: {
   sameProcess: boolean;
-  playerState: PlayerState;
+  playbackStarted: boolean;
 }): boolean {
-  return params.sameProcess && params.playerState === "playing";
+  return params.sameProcess && params.playbackStarted;
 }
 
 function directoryHasFiles(dir: string): boolean {
@@ -133,27 +133,26 @@ export class SpotifyPlaybackEngine {
     this.activeAccountId = account.id;
     this.activeDeviceId = deviceId;
     this.activeTrackUri = trackUri;
-    const reusePcmStream = shouldReuseSpotifyPcmStream({
+    const resetPcmPipeline = shouldResetSpotifyPcmPipeline({
       sameProcess,
-      playerState: player.getState(),
+      playbackStarted: this.playbackStarted,
     });
-    if (!reusePcmStream) {
-      const pcmStream = this.librespot?.stdout;
-      if (!pcmStream) {
-        throw new Error("librespot PCM stdout is not available");
-      }
-      player.playPcmStream(pcmStream, {
-        inputSampleRate: 44100,
-        cleanup: () => {
-          if (!this.playbackStarted) return;
-          this.pause().catch((err) => {
-            this.logger.warn({ err }, "Failed to pause Spotify playback during cleanup");
-          });
-        },
-      });
-    } else {
-      this.logger.info({ deviceId, trackUri }, "Reusing existing Spotify PCM stream");
+    if (resetPcmPipeline) {
+      await this.prepareForTrackSwitch(player);
     }
+    const pcmStream = this.librespot?.stdout;
+    if (!pcmStream) {
+      throw new Error("librespot PCM stdout is not available");
+    }
+    player.playPcmStream(pcmStream, {
+      inputSampleRate: 44100,
+      cleanup: () => {
+        if (!this.playbackStarted) return;
+        this.pause().catch((err) => {
+          this.logger.warn({ err }, "Failed to pause Spotify playback during cleanup");
+        });
+      },
+    });
     try {
       await this.provider.startPlayback({
         accountId: account.id,
@@ -197,6 +196,31 @@ export class SpotifyPlaybackEngine {
     this.activeDeviceId = null;
     this.activeTrackUri = null;
     this.playbackStarted = false;
+  }
+
+  private async prepareForTrackSwitch(player: AudioPlayer): Promise<void> {
+    const pcmStream = this.librespot?.stdout;
+    if (!pcmStream) return;
+    this.logger.info({ deviceId: this.activeDeviceId, trackUri: this.activeTrackUri }, "Preparing Spotify track switch");
+    try {
+      if (this.activeAccountId) {
+        await this.provider.pausePlayback(this.activeAccountId, this.activeDeviceId);
+      }
+    } catch (err) {
+      this.logger.warn({ err }, "Failed to pause Spotify playback before switching track");
+    }
+    this.playbackStarted = false;
+    player.stop({ skipCleanup: true });
+    pcmStream.unpipe?.();
+    pcmStream.pause();
+    await sleep(150);
+    let drainedBytes = 0;
+    for (;;) {
+      const chunk = pcmStream.read() as Buffer | null;
+      if (!chunk) break;
+      drainedBytes += chunk.length;
+    }
+    this.logger.info({ drainedBytes }, "Spotify PCM buffer drained before switching track");
   }
 
   private ensureRuntimeFiles(): void {
