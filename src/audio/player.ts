@@ -108,6 +108,7 @@ export class AudioPlayer extends EventEmitter {
   private static readonly MAX_CONSECUTIVE_FAILURES = 3;
   private duckingActive = false;
   private duckingFactor = 1;
+  private lastFrameAt = 0;
 
   constructor(logger: Logger) {
     super();
@@ -122,6 +123,7 @@ export class AudioPlayer extends EventEmitter {
     this.currentUrl = url;
     this.seekOffset = seekSeconds;
     this.framesPlayed = 0;
+    this.lastFrameAt = 0;
     this.ffmpegPaused = false;
     this.spawnFailed = false;
 
@@ -285,6 +287,7 @@ export class AudioPlayer extends EventEmitter {
       const opusFrame = this.encoder.encode(adjusted);
       this.emit("frame", opusFrame);
       this.framesPlayed++;
+      this.lastFrameAt = Date.now();
 
       if (this.framesPlayed === 1) {
         this.logger.info({ opusBytes: opusFrame.length }, "First audio frame encoded and emitted");
@@ -378,6 +381,7 @@ export class AudioPlayer extends EventEmitter {
     this.currentUrl = "";
     this.seekOffset = 0;
     this.framesPlayed = 0;
+    this.lastFrameAt = 0;
     this.duckingFactor = 1;
   }
 
@@ -400,5 +404,9 @@ export class AudioPlayer extends EventEmitter {
 
   getState(): PlayerState {
     return this.state;
+  }
+
+  getLastFrameAt(): number {
+    return this.lastFrameAt;
   }
 }

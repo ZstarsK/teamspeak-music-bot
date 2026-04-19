@@ -21,6 +21,23 @@ import { BotProfileManager } from "./profile.js";
 const MAX_VOLUME = 20;
 const DUCKING_RELEASE_MS = 450;
 const DUCKING_POLL_INTERVAL_MS = 100;
+const TRACK_END_GRACE_SECONDS = 1.5;
+const TRACK_END_STALL_MS = 2000;
+
+export function shouldForceTrackAdvance(params: {
+  playerState: "idle" | "playing" | "paused";
+  duration: number;
+  elapsed: number;
+  msSinceLastFrame: number;
+}): boolean {
+  if (params.playerState !== "playing") return false;
+  if (!Number.isFinite(params.duration) || params.duration <= 0) return false;
+  if (!Number.isFinite(params.elapsed) || params.elapsed < 0) return false;
+  if (!Number.isFinite(params.msSinceLastFrame) || params.msSinceLastFrame < TRACK_END_STALL_MS) {
+    return false;
+  }
+  return params.elapsed >= Math.max(0, params.duration - TRACK_END_GRACE_SECONDS);
+}
 
 export interface BotInstanceOptions {
   id: string;
@@ -71,6 +88,7 @@ export class BotInstance extends EventEmitter {
   private profileManager: BotProfileManager;
   private duckingTimer: ReturnType<typeof setInterval> | null = null;
   private lastVoicePacketAt = 0;
+  private forcedAdvanceToken: string | null = null;
 
   constructor(options: BotInstanceOptions) {
     super();
@@ -233,6 +251,7 @@ export class BotInstance extends EventEmitter {
       if (!this.connected) return;
       const active = Date.now() - this.lastVoicePacketAt < DUCKING_RELEASE_MS;
       this.player.setDuckingActive(active);
+      this.checkPlaybackStall();
     }, DUCKING_POLL_INTERVAL_MS);
   }
 
@@ -240,6 +259,50 @@ export class BotInstance extends EventEmitter {
     if (!this.duckingTimer) return;
     clearInterval(this.duckingTimer);
     this.duckingTimer = null;
+  }
+
+  private checkPlaybackStall(): void {
+    const current = this.queue.current();
+    if (!current) {
+      this.forcedAdvanceToken = null;
+      return;
+    }
+
+    const token = `${current.platform}:${current.id}:${this.queue.getCurrentIndex()}`;
+    const lastFrameAt = this.player.getLastFrameAt();
+    const msSinceLastFrame = lastFrameAt > 0 ? Date.now() - lastFrameAt : Number.POSITIVE_INFINITY;
+    const shouldAdvance = shouldForceTrackAdvance({
+      playerState: this.player.getState(),
+      duration: current.duration,
+      elapsed: this.player.getElapsed(),
+      msSinceLastFrame,
+    });
+
+    if (!shouldAdvance) {
+      if (this.forcedAdvanceToken === token && this.player.getState() !== "playing") {
+        this.forcedAdvanceToken = null;
+      } else if (this.forcedAdvanceToken !== token) {
+        this.forcedAdvanceToken = null;
+      }
+      return;
+    }
+
+    if (this.forcedAdvanceToken === token || this.isAdvancing) return;
+    this.forcedAdvanceToken = token;
+    this.logger.warn(
+      {
+        songId: current.id,
+        name: current.name,
+        elapsed: this.player.getElapsed(),
+        duration: current.duration,
+        msSinceLastFrame,
+      },
+      "Playback stalled near track end, forcing advance",
+    );
+    this.playNext().catch((err) => {
+      this.logger.error({ err, songId: current.id }, "Forced playNext failed after playback stall");
+      this.forcedAdvanceToken = null;
+    });
   }
 
   private async handleTextMessage(msg: TS3TextMessage): Promise<void> {
@@ -678,6 +741,7 @@ export class BotInstance extends EventEmitter {
     if (this.isAdvancing || !this.connected) return;
     this.isAdvancing = true;
     try {
+      this.forcedAdvanceToken = null;
       this.voteSkipUsers.clear();
       const next = this.queue.next();
       if (next) {
