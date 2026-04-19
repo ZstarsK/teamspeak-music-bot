@@ -11,7 +11,7 @@ export const PUBLIC_COMMANDS = new Set([
 ]);
 
 export const ADMIN_COMMANDS = new Set([
-  "stop", "clear", "move", "vol", "mode", "follow", "remove",
+  "stop", "clear", "move", "vol", "mode", "follow", "remove", "duck",
 ]);
 
 export function parseCommand(

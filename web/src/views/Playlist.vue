@@ -31,7 +31,7 @@
           :song="song"
           :index="i + 1"
           :active="store.currentSong?.id === song.id"
-          @play="store.playById(song.id, song.platform, song)"
+          @play="playSongAt(i)"
           @add="store.addToQueueById(song.id, song.platform, song)"
         />
       </div>
@@ -80,6 +80,12 @@ async function playAll() {
   const id = route.params.id as string;
   const platform = (route.query.platform as string) || 'netease';
   await store.playPlaylist(id, platform);
+}
+
+async function playSongAt(index: number) {
+  const id = route.params.id as string;
+  const platform = (route.query.platform as string) || 'netease';
+  await store.playPlaylist(id, platform, index);
 }
 
 onMounted(async () => {

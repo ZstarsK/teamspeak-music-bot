@@ -1,6 +1,12 @@
 import { Router } from "express";
 import type { BotManager } from "../../bot/manager.js";
-import type { BotConfig } from "../../data/config.js";
+import {
+  DUCKING_RECOVERY_MS_MAX,
+  DUCKING_RECOVERY_MS_MIN,
+  DUCKING_VOLUME_PERCENT_MAX,
+  DUCKING_VOLUME_PERCENT_MIN,
+  type BotConfig,
+} from "../../data/config.js";
 import { saveConfig } from "../../data/config.js";
 import type { Logger } from "../../logger.js";
 
@@ -15,6 +21,44 @@ export function createBotRouter(
   router.get("/", (_req, res) => {
     const bots = botManager.getAllBots().map((b) => b.getStatus());
     res.json({ bots });
+  });
+
+  // GET /api/bot/settings — 读取全局 bot 行为设置
+  router.get("/settings", (_req, res) => {
+    res.json({
+      idleTimeoutMinutes: config.idleTimeoutMinutes ?? 0,
+    });
+  });
+
+  // POST /api/bot/settings — 保存全局 bot 行为设置
+  router.post("/settings", (req, res) => {
+    const updates: Partial<BotConfig> = {};
+
+    if ("idleTimeoutMinutes" in req.body) {
+      const { idleTimeoutMinutes } = req.body;
+      if (typeof idleTimeoutMinutes !== "number" || idleTimeoutMinutes < 0) {
+        res.status(400).json({ error: "idleTimeoutMinutes must be a non-negative number" });
+        return;
+      }
+      updates.idleTimeoutMinutes = idleTimeoutMinutes;
+    }
+
+    if (Object.keys(updates).length === 0) {
+      res.status(400).json({ error: "No supported settings provided" });
+      return;
+    }
+
+    Object.assign(config, updates);
+    saveConfig(configPath, config);
+    for (const bot of botManager.getAllBots()) {
+      bot.updateIdleTimeout(config.idleTimeoutMinutes);
+    }
+    res.json({
+      ok: true,
+      settings: {
+        idleTimeoutMinutes: config.idleTimeoutMinutes,
+      },
+    });
   });
 
   router.get("/:id", (req, res) => {
@@ -79,10 +123,68 @@ export function createBotRouter(
         res.status(404).json({ error: "Bot not found" });
         return;
       }
-      const { name, serverAddress, serverPort, nickname, defaultChannel, channelPassword, serverPassword } = req.body;
+      const {
+        name,
+        serverAddress,
+        serverPort,
+        nickname,
+        defaultChannel,
+        channelPassword,
+        serverPassword,
+        duckingEnabled,
+        duckingVolumePercent,
+        duckingRecoveryMs,
+      } = req.body;
+
+      if ("duckingEnabled" in req.body && typeof duckingEnabled !== "boolean") {
+        res.status(400).json({ error: "duckingEnabled must be a boolean" });
+        return;
+      }
+      if (
+        "duckingVolumePercent" in req.body &&
+        (
+          typeof duckingVolumePercent !== "number" ||
+          !Number.isFinite(duckingVolumePercent) ||
+          duckingVolumePercent < DUCKING_VOLUME_PERCENT_MIN ||
+          duckingVolumePercent > DUCKING_VOLUME_PERCENT_MAX
+        )
+      ) {
+        res.status(400).json({
+          error: `duckingVolumePercent must be between ${DUCKING_VOLUME_PERCENT_MIN} and ${DUCKING_VOLUME_PERCENT_MAX}`,
+        });
+        return;
+      }
+      if (
+        "duckingRecoveryMs" in req.body &&
+        (
+          typeof duckingRecoveryMs !== "number" ||
+          !Number.isFinite(duckingRecoveryMs) ||
+          duckingRecoveryMs < DUCKING_RECOVERY_MS_MIN ||
+          duckingRecoveryMs > DUCKING_RECOVERY_MS_MAX
+        )
+      ) {
+        res.status(400).json({
+          error: `duckingRecoveryMs must be between ${DUCKING_RECOVERY_MS_MIN} and ${DUCKING_RECOVERY_MS_MAX}`,
+        });
+        return;
+      }
+
       // Update in database
       botManager.updateBot(req.params.id, {
-        name, serverAddress, serverPort, nickname, defaultChannel, channelPassword, serverPassword,
+        name,
+        serverAddress,
+        serverPort,
+        nickname,
+        defaultChannel,
+        channelPassword,
+        serverPassword,
+        ...(typeof duckingEnabled === "boolean" ? { duckingEnabled } : {}),
+        ...(typeof duckingVolumePercent === "number"
+          ? { duckingVolumePercent: Math.round(duckingVolumePercent) }
+          : {}),
+        ...(typeof duckingRecoveryMs === "number"
+          ? { duckingRecoveryMs: Math.round(duckingRecoveryMs) }
+          : {}),
       });
       res.json({ success: true });
     } catch (err) {
@@ -117,27 +219,5 @@ export function createBotRouter(
       res.status(500).json({ error: (err as Error).message });
     }
   });
-  
-  // GET /api/bot/settings — 读取全局 bot 行为设置
-  router.get("/settings", (_req, res) => {
-    res.json({ idleTimeoutMinutes: config.idleTimeoutMinutes ?? 0 });
-  });
-
-  // POST /api/bot/settings — 保存全局 bot 行为设置
-  router.post("/settings", (req, res) => {
-    const { idleTimeoutMinutes } = req.body;
-    if (typeof idleTimeoutMinutes !== "number" || idleTimeoutMinutes < 0) {
-      res.status(400).json({ error: "idleTimeoutMinutes must be a non-negative number" });
-      return;
-    }
-    config.idleTimeoutMinutes = idleTimeoutMinutes;
-    saveConfig(configPath, config);
-    // 通知所有 bot 实例更新定时器
-    for (const bot of botManager.getAllBots()) {
-      bot.updateIdleTimeout(idleTimeoutMinutes);
-    }
-    res.json({ ok: true });
-  });
-
   return router;
 }

@@ -55,11 +55,12 @@
 
       <div class="player-right">
         <Icon icon="mdi:volume-high" class="volume-icon" />
+<!--        音量范围        -->
         <input
           type="range"
           min="0"
-          max="20"
-          :value="activeBot?.volume ?? 8"
+          max="35"
+          :value="activeBot?.volume ?? 18"
           @change="onVolumeChange"
           class="volume-slider"
         />

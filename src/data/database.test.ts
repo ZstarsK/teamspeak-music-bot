@@ -63,6 +63,9 @@ describe("database", () => {
       serverProtocol: "",
       ts6ApiKey: "",
       serverPassword: "",
+      duckingEnabled: true,
+      duckingVolumePercent: 35,
+      duckingRecoveryMs: 420,
     };
 
     botDb.saveBotInstance(instance);
@@ -92,6 +95,9 @@ describe("database", () => {
       serverProtocol: "",
       ts6ApiKey: "",
       serverPassword: "",
+      duckingEnabled: true,
+      duckingVolumePercent: 35,
+      duckingRecoveryMs: 420,
     });
 
     expect(botDb.deleteBotInstance("bot1")).toBe(true);

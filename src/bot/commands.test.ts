@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseCommand } from "./commands.js";
+import { isAdminCommand, parseCommand } from "./commands.js";
 
 describe("Command Parser", () => {
   it("parses simple command", () => {
@@ -58,5 +58,9 @@ describe("Command Parser", () => {
     const result = parseCommand("!remove 3", "!");
     expect(result!.name).toBe("remove");
     expect(result!.args).toBe("3");
+  });
+
+  it("marks duck as an admin command", () => {
+    expect(isAdminCommand("duck")).toBe(true);
   });
 });

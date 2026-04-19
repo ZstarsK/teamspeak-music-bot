@@ -50,5 +50,6 @@ describe("config", () => {
     expect(loaded.theme).toBe("dark");
     expect(loaded.commandPrefix).toBe("!");
     expect(loaded.autoPauseOnEmpty).toBe(true);
+    expect(loaded.idleTimeoutMinutes).toBe(0);
   });
 });

@@ -7,7 +7,7 @@ import {
 import type { MusicProvider } from "../music/provider.js";
 import { YouTubeProvider } from "../music/youtube.js";
 import type { BotDatabase } from "../data/database.js";
-import type { BotConfig } from "../data/config.js";
+import { getDefaultDuckingSettings, type BotConfig, type DuckingSettings } from "../data/config.js";
 import type { Logger } from "../logger.js";
 
 import type { ServerProtocol } from "../ts-protocol/client.js";
@@ -63,6 +63,9 @@ export interface CreateBotParams {
   ts6ApiKey?: string;
   /** Password required to join the TS server. */
   serverPassword?: string;
+  duckingEnabled?: boolean;
+  duckingVolumePercent?: number;
+  duckingRecoveryMs?: number;
 }
 
 export class BotManager extends EventEmitter {
@@ -81,7 +84,7 @@ export class BotManager extends EventEmitter {
     bilibiliProvider: MusicProvider,
     database: BotDatabase,
     config: BotConfig,
-    logger: Logger
+    logger: Logger,
   ) {
     super();
     this.neteaseProvider = neteaseProvider;
@@ -95,6 +98,12 @@ export class BotManager extends EventEmitter {
 
   async createBot(params: CreateBotParams): Promise<BotInstance> {
     const id = crypto.randomUUID();
+    const defaultDucking = getDefaultDuckingSettings();
+    const duckingSettings: DuckingSettings = {
+      enabled: params.duckingEnabled ?? defaultDucking.enabled,
+      volumePercent: params.duckingVolumePercent ?? defaultDucking.volumePercent,
+      recoveryMs: params.duckingRecoveryMs ?? defaultDucking.recoveryMs,
+    };
 
     const bot = new BotInstance({
       id,
@@ -117,6 +126,7 @@ export class BotManager extends EventEmitter {
       database: this.database,
       config: this.config,
       logger: this.logger,
+      duckingSettings,
     });
 
     this.bots.set(id, bot);
@@ -134,6 +144,9 @@ export class BotManager extends EventEmitter {
       serverProtocol: params.serverProtocol ?? "",
       ts6ApiKey: params.ts6ApiKey ?? "",
       serverPassword: params.serverPassword ?? "",
+      duckingEnabled: duckingSettings.enabled,
+      duckingVolumePercent: duckingSettings.volumePercent,
+      duckingRecoveryMs: duckingSettings.recoveryMs,
     });
 
     this.logger.info({ botId: id, name: params.name }, "Bot instance created");
@@ -167,11 +180,31 @@ export class BotManager extends EventEmitter {
       serverProtocol: params.serverProtocol ?? existing.serverProtocol,
       ts6ApiKey: params.ts6ApiKey ?? existing.ts6ApiKey,
       serverPassword: params.serverPassword ?? existing.serverPassword,
+      duckingEnabled: params.duckingEnabled ?? existing.duckingEnabled,
+      duckingVolumePercent: params.duckingVolumePercent ?? existing.duckingVolumePercent,
+      duckingRecoveryMs: params.duckingRecoveryMs ?? existing.duckingRecoveryMs,
     });
     // Update in-memory name immediately (other fields need reconnect)
     const bot = this.bots.get(id);
     if (bot && params.name) {
       bot.name = params.name;
+    }
+    if (
+      bot &&
+      (
+        params.duckingEnabled !== undefined ||
+        params.duckingVolumePercent !== undefined ||
+        params.duckingRecoveryMs !== undefined
+      )
+    ) {
+      bot.updateDuckingSettings(
+        {
+          ...(params.duckingEnabled !== undefined ? { enabled: params.duckingEnabled } : {}),
+          ...(params.duckingVolumePercent !== undefined ? { volumePercent: params.duckingVolumePercent } : {}),
+          ...(params.duckingRecoveryMs !== undefined ? { recoveryMs: params.duckingRecoveryMs } : {}),
+        },
+        false,
+      );
     }
     this.logger.info({ botId: id }, "Bot instance config updated (connection changes need restart)");
   }
@@ -233,6 +266,11 @@ export class BotManager extends EventEmitter {
         database: this.database,
         config: this.config,
         logger: this.logger,
+        duckingSettings: {
+          enabled: saved.duckingEnabled,
+          volumePercent: saved.duckingVolumePercent,
+          recoveryMs: saved.duckingRecoveryMs,
+        },
       });
       this.bots.set(id, bot);
       this.emit("botInstance", bot);
@@ -283,6 +321,11 @@ export class BotManager extends EventEmitter {
         database: this.database,
         config: this.config,
         logger: this.logger,
+        duckingSettings: {
+          enabled: saved.duckingEnabled,
+          volumePercent: saved.duckingVolumePercent,
+          recoveryMs: saved.duckingRecoveryMs,
+        },
       });
 
       this.bots.set(saved.id, bot);

@@ -79,26 +79,36 @@
           class="account-playlist-group"
         >
           <div class="account-playlist-header">
-            <img
-              v-if="group.avatarUrl"
-              :src="group.avatarUrl"
-              class="account-avatar"
-              alt=""
-            />
-            <div v-else class="account-avatar-placeholder">
-              {{ platformLabel(group.platform).slice(0, 1) }}
-            </div>
-            <div class="account-heading">
-              <div class="account-title">{{ group.title }}</div>
-              <div class="account-subtitle">
-                {{ platformLabel(group.platform) }} · {{ group.total }} 个歌单
+            <div class="account-playlist-info">
+              <img
+                v-if="group.avatarUrl"
+                :src="group.avatarUrl"
+                class="account-avatar"
+                alt=""
+              />
+              <div v-else class="account-avatar-placeholder">
+                {{ platformLabel(group.platform).slice(0, 1) }}
+              </div>
+              <div class="account-heading">
+                <div class="account-title">{{ group.title }}</div>
+                <div class="account-subtitle">
+                  {{ platformLabel(group.platform) }} · {{ group.total }} 个歌单
+                </div>
               </div>
             </div>
+            <button
+              class="account-toggle-btn"
+              :aria-expanded="group.expanded"
+              @click="togglePlaylistGroup(group.id)"
+            >
+              <span>{{ group.expanded ? '收起' : '展开' }}</span>
+              <Icon :icon="group.expanded ? 'mdi:chevron-up' : 'mdi:chevron-down'" />
+            </button>
           </div>
 
-          <div class="playlist-grid">
+          <div v-if="group.expanded" class="playlist-grid">
             <RouterLink
-              v-for="pl in group.visiblePlaylists"
+              v-for="pl in group.playlists"
               :key="`${group.id}-${pl.id}`"
               :to="playlistRoute(pl)"
               class="playlist-card hover-scale"
@@ -108,15 +118,6 @@
               <div class="playlist-count">{{ pl.songCount }} 首</div>
             </RouterLink>
           </div>
-
-          <button
-            v-if="group.total > USER_PLAYLIST_LIMIT"
-            class="expand-btn"
-            @click="togglePlaylistGroup(group.id)"
-          >
-            <Icon :icon="expandedPlaylistGroups[group.id] ? 'mdi:chevron-up' : 'mdi:chevron-down'" />
-            {{ expandedPlaylistGroups[group.id] ? '收起' : `展开该账号全部 ${group.total} 个歌单` }}
-          </button>
         </div>
       </div>
     </section>
@@ -151,7 +152,6 @@ import { usePlayerStore, type PlaylistItem, type Song } from '../stores/player.j
 import CoverArt from '../components/CoverArt.vue';
 
 const store = usePlayerStore();
-const USER_PLAYLIST_LIMIT = 20;
 const expandedPlaylistGroups = ref<Record<string, boolean>>({});
 
 interface UserPlaylistGroup {
@@ -160,8 +160,8 @@ interface UserPlaylistGroup {
   platform: string;
   avatarUrl?: string;
   playlists: PlaylistItem[];
-  visiblePlaylists: PlaylistItem[];
   total: number;
+  expanded: boolean;
 }
 
 function platformLabel(platform: string) {
@@ -172,7 +172,7 @@ function platformLabel(platform: string) {
 }
 
 const userPlaylistGroups = computed<UserPlaylistGroup[]>(() => {
-  const groups = new Map<string, Omit<UserPlaylistGroup, 'visiblePlaylists' | 'total'>>();
+  const groups = new Map<string, Omit<UserPlaylistGroup, 'expanded' | 'total'>>();
 
   for (const playlist of store.userPlaylists) {
     const id = playlist.account?.id ?? playlist.platform;
@@ -189,12 +189,9 @@ const userPlaylistGroups = computed<UserPlaylistGroup[]>(() => {
   }
 
   return Array.from(groups.values()).map((group) => {
-    const expanded = expandedPlaylistGroups.value[group.id] === true;
     return {
       ...group,
-      visiblePlaylists: expanded
-        ? group.playlists
-        : group.playlists.slice(0, USER_PLAYLIST_LIMIT),
+      expanded: expandedPlaylistGroups.value[group.id] === true,
       total: group.playlists.length,
     };
   });
@@ -289,7 +286,20 @@ onMounted(() => {
 .account-playlist-header {
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.account-playlist-info {
+  display: flex;
+  align-items: center;
   gap: 12px;
+  min-width: 0;
+  flex: 1;
+}
+
+.account-heading {
+  min-width: 0;
 }
 
 .account-avatar,
@@ -325,20 +335,18 @@ onMounted(() => {
   color: var(--text-tertiary);
 }
 
-.expand-btn {
+.account-toggle-btn {
   display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 4px;
-  width: 100%;
-  padding: 10px;
-  margin-top: 12px;
+  gap: 6px;
+  padding: 8px 12px;
   background: var(--bg-card);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-sm);
   font-size: 13px;
   font-weight: 500;
   color: var(--text-secondary);
   transition: all var(--transition-fast);
+  flex-shrink: 0;
 
   &:hover {
     background: var(--hover-bg);

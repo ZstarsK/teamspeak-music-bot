@@ -1,4 +1,5 @@
 import Database from "better-sqlite3";
+import { getDefaultDuckingSettings } from "./config.js";
 
 export interface PlayHistoryEntry {
   botId: string;
@@ -30,6 +31,9 @@ export interface BotInstance {
   ts6ApiKey: string;
   /** Password to join the TS server (server password) */
   serverPassword: string;
+  duckingEnabled: boolean;
+  duckingVolumePercent: number;
+  duckingRecoveryMs: number;
   identity?: string;
 }
 
@@ -66,6 +70,7 @@ export interface BotDatabase {
 function migrateSchema(db: Database.Database): void {
   const columns = db.prepare("PRAGMA table_info(bot_instances)").all() as Array<{ name: string }>;
   const names = columns.map((c) => c.name);
+  const defaultDucking = getDefaultDuckingSettings();
   if (!names.includes("identity")) {
     db.exec("ALTER TABLE bot_instances ADD COLUMN identity TEXT");
   }
@@ -77,6 +82,15 @@ function migrateSchema(db: Database.Database): void {
   }
   if (!names.includes("serverPassword")) {
     db.exec("ALTER TABLE bot_instances ADD COLUMN serverPassword TEXT NOT NULL DEFAULT ''");
+  }
+  if (!names.includes("duckingEnabled")) {
+    db.exec(`ALTER TABLE bot_instances ADD COLUMN duckingEnabled INTEGER NOT NULL DEFAULT ${defaultDucking.enabled ? 1 : 0}`);
+  }
+  if (!names.includes("duckingVolumePercent")) {
+    db.exec(`ALTER TABLE bot_instances ADD COLUMN duckingVolumePercent INTEGER NOT NULL DEFAULT ${defaultDucking.volumePercent}`);
+  }
+  if (!names.includes("duckingRecoveryMs")) {
+    db.exec(`ALTER TABLE bot_instances ADD COLUMN duckingRecoveryMs INTEGER NOT NULL DEFAULT ${defaultDucking.recoveryMs}`);
   }
   // Profile feature flags
   const profileCols = [
@@ -95,6 +109,7 @@ function migrateSchema(db: Database.Database): void {
 }
 
 function initTables(db: Database.Database): void {
+  const defaultDucking = getDefaultDuckingSettings();
   db.exec(`
     CREATE TABLE IF NOT EXISTS play_history (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -120,6 +135,9 @@ function initTables(db: Database.Database): void {
       serverProtocol TEXT NOT NULL DEFAULT '',
       ts6ApiKey TEXT NOT NULL DEFAULT '',
       serverPassword TEXT NOT NULL DEFAULT '',
+      duckingEnabled INTEGER NOT NULL DEFAULT ${defaultDucking.enabled ? 1 : 0},
+      duckingVolumePercent INTEGER NOT NULL DEFAULT ${defaultDucking.volumePercent},
+      duckingRecoveryMs INTEGER NOT NULL DEFAULT ${defaultDucking.recoveryMs},
       identity TEXT
     );
   `);
@@ -141,8 +159,8 @@ export function createDatabase(dbPath: string): BotDatabase {
   `);
 
   const upsertInstance = db.prepare(`
-    INSERT INTO bot_instances (id, name, serverAddress, serverPort, nickname, defaultChannel, channelPassword, autoStart, serverProtocol, ts6ApiKey, serverPassword, identity)
-    VALUES (@id, @name, @serverAddress, @serverPort, @nickname, @defaultChannel, @channelPassword, @autoStart, @serverProtocol, @ts6ApiKey, @serverPassword, @identity)
+    INSERT INTO bot_instances (id, name, serverAddress, serverPort, nickname, defaultChannel, channelPassword, autoStart, serverProtocol, ts6ApiKey, serverPassword, duckingEnabled, duckingVolumePercent, duckingRecoveryMs, identity)
+    VALUES (@id, @name, @serverAddress, @serverPort, @nickname, @defaultChannel, @channelPassword, @autoStart, @serverProtocol, @ts6ApiKey, @serverPassword, @duckingEnabled, @duckingVolumePercent, @duckingRecoveryMs, @identity)
     ON CONFLICT(id) DO UPDATE SET
       name = excluded.name,
       serverAddress = excluded.serverAddress,
@@ -154,6 +172,9 @@ export function createDatabase(dbPath: string): BotDatabase {
       serverProtocol = excluded.serverProtocol,
       ts6ApiKey = excluded.ts6ApiKey,
       serverPassword = excluded.serverPassword,
+      duckingEnabled = excluded.duckingEnabled,
+      duckingVolumePercent = excluded.duckingVolumePercent,
+      duckingRecoveryMs = excluded.duckingRecoveryMs,
       identity = excluded.identity
   `);
 
@@ -194,21 +215,30 @@ export function createDatabase(dbPath: string): BotDatabase {
       upsertInstance.run({
         ...instance,
         autoStart: instance.autoStart ? 1 : 0,
+        duckingEnabled: instance.duckingEnabled ? 1 : 0,
         identity: instance.identity ?? null,
       });
     },
 
     getBotInstances() {
-      const rows = selectInstances.all() as Array<
-        Omit<BotInstance, "autoStart" | "identity"> & { autoStart: number; identity: string | null }
-      >;
+      const rows = selectInstances.all() as Array<Record<string, unknown>>;
+      const defaultDucking = getDefaultDuckingSettings();
       return rows.map((r) => ({
-        ...r,
+        id: String(r.id ?? ""),
+        name: String(r.name ?? ""),
+        serverAddress: String(r.serverAddress ?? ""),
+        serverPort: Number(r.serverPort ?? 9987),
+        nickname: String(r.nickname ?? ""),
+        defaultChannel: String(r.defaultChannel ?? ""),
+        channelPassword: String(r.channelPassword ?? ""),
         autoStart: r.autoStart === 1,
-        serverProtocol: r.serverProtocol ?? "",
-        ts6ApiKey: r.ts6ApiKey ?? "",
-        serverPassword: r.serverPassword ?? "",
-        identity: r.identity ?? undefined,
+        serverProtocol: String(r.serverProtocol ?? ""),
+        ts6ApiKey: String(r.ts6ApiKey ?? ""),
+        serverPassword: String(r.serverPassword ?? ""),
+        duckingEnabled: r.duckingEnabled === 1,
+        duckingVolumePercent: Number(r.duckingVolumePercent ?? defaultDucking.volumePercent),
+        duckingRecoveryMs: Number(r.duckingRecoveryMs ?? defaultDucking.recoveryMs),
+        identity: typeof r.identity === "string" ? r.identity : undefined,
       }));
     },
 

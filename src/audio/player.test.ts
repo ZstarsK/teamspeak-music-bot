@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { AudioPlayer } from "./player.js";
+import { getDefaultDuckingSettings } from "../data/config.js";
 
 const logger = {
   child() {
@@ -22,6 +23,7 @@ function peakSample(pcm: Buffer): number {
 describe("AudioPlayer ducking", () => {
   it("fades volume down and back up when ducking toggles", () => {
     const player = new AudioPlayer(logger);
+    player.setDuckingConfig(getDefaultDuckingSettings());
     const pcm = Buffer.alloc(3840);
     for (let i = 0; i < pcm.length; i += 2) {
       pcm.writeInt16LE(20000, i);
@@ -45,5 +47,23 @@ describe("AudioPlayer ducking", () => {
     expect(ducked).toBeLessThan(normal);
     expect(restored).toBeGreaterThan(ducked);
     expect(restored).toBe(normal);
+  });
+
+  it("respects configured ducking percentage", () => {
+    const player = new AudioPlayer(logger);
+    player.setDuckingConfig({ enabled: true, volumePercent: 20, recoveryMs: 300 });
+    const pcm = Buffer.alloc(3840);
+    for (let i = 0; i < pcm.length; i += 2) {
+      pcm.writeInt16LE(20000, i);
+    }
+
+    player.setVolume(10);
+    player.setDuckingActive(true);
+    let ducked = 0;
+    for (let i = 0; i < 12; i++) {
+      ducked = peakSample((player as any).applyVolume(pcm));
+    }
+
+    expect(ducked).toBe(400);
   });
 });

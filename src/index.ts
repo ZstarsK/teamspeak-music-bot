@@ -59,7 +59,7 @@ async function main() {
     bilibiliProvider,
     db,
     config,
-    logger
+    logger,
   );
   await botManager.loadSavedBots();
 

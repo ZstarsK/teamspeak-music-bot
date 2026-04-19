@@ -80,9 +80,51 @@
             <label>服务器密码（可选）</label>
             <input v-model="editForm.serverPassword" class="input" type="password" placeholder="服务器有密码时填写" />
           </div>
+          <div class="modal-divider">Ducking</div>
+          <div class="setting-row modal-setting-row">
+            <div class="setting-label">
+              <Icon icon="mdi:volume-medium" class="setting-icon" />
+              <div>
+                <div>自动 Ducking</div>
+                <div class="setting-help">频道里有人说话时自动降低音乐音量</div>
+              </div>
+            </div>
+            <label class="toggle-label">
+              <input v-model="editForm.duckingEnabled" type="checkbox" />
+              <span>{{ editForm.duckingEnabled ? '开启' : '关闭' }}</span>
+            </label>
+          </div>
+          <div class="form-row">
+            <div class="form-group" style="flex:1">
+              <label>Duck 后音量</label>
+              <div class="inline-input-wrap">
+                <input
+                  v-model.number="editForm.duckingVolumePercent"
+                  type="number"
+                  min="0"
+                  max="100"
+                  class="input"
+                />
+                <span>%</span>
+              </div>
+            </div>
+            <div class="form-group" style="flex:1">
+              <label>恢复时间</label>
+              <div class="inline-input-wrap">
+                <input
+                  v-model.number="editForm.duckingRecoveryMs"
+                  type="number"
+                  min="0"
+                  max="10000"
+                  class="input"
+                />
+                <span>ms</span>
+              </div>
+            </div>
+          </div>
           <div class="modal-actions">
             <button class="btn-secondary" @click="editingBot = null">取消</button>
-            <button class="btn-primary" @click="saveEditBot">保存（需重启机器人生效）</button>
+            <button class="btn-primary" @click="saveEditBot">保存（连接设置需重启，Ducking 立即生效）</button>
           </div>
         </div>
       </div>
@@ -393,7 +435,7 @@
             placeholder="0"
           />
           <span style="font-size:13px; opacity:0.7">分钟</span>
-          <button class="btn-primary" @click="saveIdleTimeout">保存</button>
+          <button class="btn-primary" @click="saveBotSettings">保存</button>
         </div>
       </div>
     </section>
@@ -440,6 +482,9 @@ const editForm = reactive({
   defaultChannel: '',
   channelPassword: '',
   serverPassword: '',
+  duckingEnabled: true,
+  duckingVolumePercent: 35,
+  duckingRecoveryMs: 420,
 });
 
 const neteaseCookie = ref('');
@@ -637,6 +682,9 @@ async function openEditBot(bot: any) {
     editForm.defaultChannel = res.data.defaultChannel ?? '';
     editForm.channelPassword = res.data.channelPassword ?? '';
     editForm.serverPassword = res.data.serverPassword ?? '';
+    editForm.duckingEnabled = res.data.duckingEnabled ?? true;
+    editForm.duckingVolumePercent = res.data.duckingVolumePercent ?? 35;
+    editForm.duckingRecoveryMs = res.data.duckingRecoveryMs ?? 420;
   } catch {
     // Config not found — use defaults
     editForm.serverAddress = '';
@@ -645,13 +693,16 @@ async function openEditBot(bot: any) {
     editForm.defaultChannel = '';
     editForm.channelPassword = '';
     editForm.serverPassword = '';
+    editForm.duckingEnabled = true;
+    editForm.duckingVolumePercent = 35;
+    editForm.duckingRecoveryMs = 420;
   }
 }
 
 async function saveEditBot() {
   if (!editingBot.value) return;
   try {
-    await axios.put(`/api/bot/${editingBot.value}`, editForm);
+    await axios.put(`/api/bot/${editingBot.value}`, { ...editForm });
     editingBot.value = null;
     await store.fetchBots();
   } catch {
@@ -690,16 +741,18 @@ async function savePrefix() {
 // Idle timeout
 const idleTimeout = ref(0);
 
-async function loadIdleTimeout() {
+async function loadBotSettings() {
   try {
     const res = await axios.get('/api/bot/settings');
     idleTimeout.value = res.data.idleTimeoutMinutes ?? 0;
   } catch { /* ignore */ }
 }
 
-async function saveIdleTimeout() {
+async function saveBotSettings() {
   try {
-    await axios.post('/api/bot/settings', { idleTimeoutMinutes: idleTimeout.value });
+    await axios.post('/api/bot/settings', {
+      idleTimeoutMinutes: idleTimeout.value,
+    });
   } catch { /* ignore */ }
 }
 
@@ -707,7 +760,7 @@ onMounted(() => {
   store.fetchBots(); // Refresh bot status on page visit
   checkAuthStatus();
   loadQuality();
-  loadIdleTimeout();
+  loadBotSettings();
 });
 
 onUnmounted(() => {
@@ -773,6 +826,12 @@ onUnmounted(() => {
   opacity: 0.6;
 }
 
+.setting-help {
+  font-size: 12px;
+  opacity: 0.6;
+  margin-top: 2px;
+}
+
 .theme-toggle {
   display: flex;
   align-items: center;
@@ -831,6 +890,32 @@ onUnmounted(() => {
     background: rgba(255, 152, 0, 0.15);
     color: #ff9800;
   }
+}
+
+.modal-divider {
+  margin: 8px 0 4px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+}
+
+.modal-setting-row {
+  margin-bottom: 12px;
+}
+
+.toggle-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+}
+
+.inline-input-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 // Account cards

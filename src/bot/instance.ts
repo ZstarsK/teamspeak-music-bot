@@ -15,7 +15,15 @@ import {
 } from "./commands.js";
 import type { Logger } from "../logger.js";
 import type { BotDatabase, ProfileConfig } from "../data/database.js";
-import type { BotConfig } from "../data/config.js";
+import {
+  DUCKING_RECOVERY_MS_MAX,
+  DUCKING_RECOVERY_MS_MIN,
+  DUCKING_VOLUME_PERCENT_MAX,
+  DUCKING_VOLUME_PERCENT_MIN,
+  getDefaultDuckingSettings,
+  type BotConfig,
+  type DuckingSettings,
+} from "../data/config.js";
 import { BotProfileManager } from "./profile.js";
 
 const MAX_VOLUME = 20;
@@ -39,6 +47,25 @@ export function shouldForceTrackAdvance(params: {
   return params.elapsed >= Math.max(0, params.duration - TRACK_END_GRACE_SECONDS);
 }
 
+export function chooseInitialQueueIndex(params: {
+  mode: PlayMode;
+  queueSize: number;
+  startIndex?: number;
+}): number | null {
+  const { mode, queueSize, startIndex } = params;
+  if (!Number.isInteger(queueSize) || queueSize <= 0) return null;
+  if (startIndex !== undefined) {
+    if (!Number.isInteger(startIndex) || startIndex < 0 || startIndex >= queueSize) {
+      return null;
+    }
+    return startIndex;
+  }
+  if (mode === PlayMode.Random || mode === PlayMode.RandomLoop) {
+    return Math.floor(Math.random() * queueSize);
+  }
+  return 0;
+}
+
 export interface BotInstanceOptions {
   id: string;
   name: string;
@@ -50,6 +77,7 @@ export interface BotInstanceOptions {
   database: BotDatabase;
   config: BotConfig;
   logger: Logger;
+  duckingSettings?: DuckingSettings;
 }
 
 export interface BotStatus {
@@ -89,6 +117,7 @@ export class BotInstance extends EventEmitter {
   private duckingTimer: ReturnType<typeof setInterval> | null = null;
   private lastVoicePacketAt = 0;
   private forcedAdvanceToken: string | null = null;
+  private duckingSettings: DuckingSettings;
 
   constructor(options: BotInstanceOptions) {
     super();
@@ -101,9 +130,11 @@ export class BotInstance extends EventEmitter {
     this.database = options.database;
     this.config = options.config;
     this.logger = options.logger.child({ botId: this.id });
+    this.duckingSettings = { ...(options.duckingSettings ?? getDefaultDuckingSettings()) };
 
     this.tsClient = new TS3Client(options.tsOptions, this.logger);
     this.player = new AudioPlayer(this.logger);
+    this.syncDuckingConfig();
     this.queue = new PlayQueue();
 
     const profileConfig = this.database.getProfileConfig(this.id);
@@ -249,7 +280,10 @@ export class BotInstance extends EventEmitter {
     if (this.duckingTimer) return;
     this.duckingTimer = setInterval(() => {
       if (!this.connected) return;
-      const active = Date.now() - this.lastVoicePacketAt < DUCKING_RELEASE_MS;
+      this.syncDuckingConfig();
+      const active =
+        this.duckingSettings.enabled &&
+        Date.now() - this.lastVoicePacketAt < DUCKING_RELEASE_MS;
       this.player.setDuckingActive(active);
       this.checkPlaybackStall();
     }, DUCKING_POLL_INTERVAL_MS);
@@ -259,6 +293,34 @@ export class BotInstance extends EventEmitter {
     if (!this.duckingTimer) return;
     clearInterval(this.duckingTimer);
     this.duckingTimer = null;
+  }
+
+  syncDuckingConfig(): void {
+    this.player.setDuckingConfig(this.duckingSettings);
+  }
+
+  getDuckingSettings(): DuckingSettings {
+    return { ...this.duckingSettings };
+  }
+
+  updateDuckingSettings(partial: Partial<DuckingSettings>, persist = true): DuckingSettings {
+    this.duckingSettings = {
+      ...this.duckingSettings,
+      ...partial,
+    };
+    this.syncDuckingConfig();
+    if (persist) {
+      const saved = this.database.getBotInstances().find((instance) => instance.id === this.id);
+      if (saved) {
+        this.database.saveBotInstance({
+          ...saved,
+          duckingEnabled: this.duckingSettings.enabled,
+          duckingVolumePercent: this.duckingSettings.volumePercent,
+          duckingRecoveryMs: this.duckingSettings.recoveryMs,
+        });
+      }
+    }
+    return this.getDuckingSettings();
   }
 
   private checkPlaybackStall(): void {
@@ -390,6 +452,8 @@ export class BotInstance extends EventEmitter {
         return this.cmdRemove(cmd);
       case "mode":
         return this.cmdMode(cmd);
+      case "duck":
+        return this.cmdDuck(cmd);
       case "playlist":
         return this.cmdPlaylist(cmd);
       case "album":
@@ -619,6 +683,56 @@ export class BotInstance extends EventEmitter {
     return `Play mode set to: ${cmd.args}`;
   }
 
+  private formatDuckingSettings(settings: DuckingSettings = this.duckingSettings): string {
+    return `Ducking: ${settings.enabled ? "on" : "off"}, level ${settings.volumePercent}%, recovery ${settings.recoveryMs}ms`;
+  }
+
+  private cmdDuck(cmd: ParsedCommand): string {
+    const [actionRaw, valueRaw] = cmd.rawArgs;
+    if (!actionRaw) {
+      return this.formatDuckingSettings();
+    }
+
+    const action = actionRaw.toLowerCase();
+    if (action === "on" || action === "enable") {
+      this.updateDuckingSettings({ enabled: true });
+    } else if (action === "off" || action === "disable") {
+      this.updateDuckingSettings({ enabled: false });
+    } else if (action === "percent" || action === "level" || action === "volume") {
+      const value = Number.parseInt(valueRaw ?? "", 10);
+      if (
+        !Number.isFinite(value) ||
+        value < DUCKING_VOLUME_PERCENT_MIN ||
+        value > DUCKING_VOLUME_PERCENT_MAX
+      ) {
+        return `Usage: !duck percent <${DUCKING_VOLUME_PERCENT_MIN}-${DUCKING_VOLUME_PERCENT_MAX}>`;
+      }
+      this.updateDuckingSettings({ volumePercent: value });
+    } else if (action === "release" || action === "recovery") {
+      const value = Number.parseInt(valueRaw ?? "", 10);
+      if (
+        !Number.isFinite(value) ||
+        value < DUCKING_RECOVERY_MS_MIN ||
+        value > DUCKING_RECOVERY_MS_MAX
+      ) {
+        return `Usage: !duck release <${DUCKING_RECOVERY_MS_MIN}-${DUCKING_RECOVERY_MS_MAX}>`;
+      }
+      this.updateDuckingSettings({ recoveryMs: value });
+    } else if (action === "status") {
+      return this.formatDuckingSettings();
+    } else {
+      return [
+        "Usage:",
+        "!duck",
+        "!duck <on|off>",
+        `!duck percent <${DUCKING_VOLUME_PERCENT_MIN}-${DUCKING_VOLUME_PERCENT_MAX}>`,
+        `!duck release <${DUCKING_RECOVERY_MS_MIN}-${DUCKING_RECOVERY_MS_MAX}>`,
+      ].join("\n");
+    }
+
+    return this.formatDuckingSettings();
+  }
+
   private async cmdPlaylist(cmd: ParsedCommand): Promise<string> {
     if (!cmd.args) return "Usage: !playlist <playlist ID or URL>";
     const provider = this.getProvider(cmd.flags);
@@ -630,7 +744,11 @@ export class BotInstance extends EventEmitter {
     for (const song of songs) {
       this.queue.add({ ...song, platform: provider.platform });
     }
-    const first = this.queue.play();
+    const startIndex = chooseInitialQueueIndex({
+      mode: this.queue.getMode(),
+      queueSize: this.queue.size(),
+    });
+    const first = startIndex === null ? null : this.queue.playAt(startIndex);
     if (first) await this.resolveAndPlay(first);
     this.emit("stateChange");
     return `Loaded ${songs.length} songs. Now playing: ${first?.name ?? "unknown"}`;
@@ -646,7 +764,11 @@ export class BotInstance extends EventEmitter {
     for (const song of songs) {
       this.queue.add({ ...song, platform: provider.platform });
     }
-    const first = this.queue.play();
+    const startIndex = chooseInitialQueueIndex({
+      mode: this.queue.getMode(),
+      queueSize: this.queue.size(),
+    });
+    const first = startIndex === null ? null : this.queue.playAt(startIndex);
     if (first) await this.resolveAndPlay(first);
     this.emit("stateChange");
     return `Loaded ${songs.length} songs. Now playing: ${first?.name ?? "unknown"}`;
@@ -664,7 +786,11 @@ export class BotInstance extends EventEmitter {
     for (const song of songs) {
       this.queue.add({ ...song, platform: "netease" });
     }
-    const first = this.queue.play();
+    const startIndex = chooseInitialQueueIndex({
+      mode: this.queue.getMode(),
+      queueSize: this.queue.size(),
+    });
+    const first = startIndex === null ? null : this.queue.playAt(startIndex);
     if (first) await this.resolveAndPlay(first);
     this.emit("stateChange");
     return `Personal FM started: ${first?.name ?? "unknown"} - ${first?.artist ?? ""}`;
@@ -725,6 +851,7 @@ export class BotInstance extends EventEmitter {
       `${p}next/prev    — Next/previous`,
       `${p}stop         — Stop and clear queue`,
       `${p}vol <0-${MAX_VOLUME}>  — Set volume`,
+      `${p}duck [on|off|percent|release] — Ducking settings`,
       `${p}queue        — Show queue`,
       `${p}mode <seq|loop|random|rloop> — Play mode`,
       `${p}playlist <id> — Load playlist`,

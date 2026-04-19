@@ -1,5 +1,10 @@
-import { describe, expect, it } from "vitest";
-import { shouldForceTrackAdvance } from "./instance.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { PlayMode } from "../audio/queue.js";
+import { chooseInitialQueueIndex, shouldForceTrackAdvance } from "./instance.js";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe("shouldForceTrackAdvance", () => {
   it("forces advance when playback stalls near the reported end", () => {
@@ -33,5 +38,46 @@ describe("shouldForceTrackAdvance", () => {
         msSinceLastFrame: 5000,
       }),
     ).toBe(false);
+  });
+});
+
+describe("chooseInitialQueueIndex", () => {
+  it("uses the requested start index when provided", () => {
+    expect(
+      chooseInitialQueueIndex({
+        mode: PlayMode.Random,
+        queueSize: 8,
+        startIndex: 5,
+      }),
+    ).toBe(5);
+  });
+
+  it("uses the first song for sequential modes", () => {
+    expect(
+      chooseInitialQueueIndex({
+        mode: PlayMode.Loop,
+        queueSize: 8,
+      }),
+    ).toBe(0);
+  });
+
+  it("picks a random initial index for random modes", () => {
+    vi.spyOn(Math, "random").mockReturnValue(0.6);
+    expect(
+      chooseInitialQueueIndex({
+        mode: PlayMode.RandomLoop,
+        queueSize: 5,
+      }),
+    ).toBe(3);
+  });
+
+  it("rejects invalid start indices", () => {
+    expect(
+      chooseInitialQueueIndex({
+        mode: PlayMode.Sequential,
+        queueSize: 3,
+        startIndex: 4,
+      }),
+    ).toBeNull();
   });
 });

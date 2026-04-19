@@ -3,6 +3,7 @@ import { EventEmitter } from "node:events";
 import { createRequire } from "node:module";
 import { accessSync, chmodSync, constants } from "node:fs";
 import { createOpusEncoder, PCM_FRAME_BYTES, type Encoder } from "./encoder.js";
+import { getDefaultDuckingSettings, type DuckingSettings } from "../data/config.js";
 import type { Logger } from "../logger.js";
 
 // ffmpeg-static is a CJS module that exports the path to the bundled ffmpeg binary.
@@ -83,9 +84,7 @@ export type PlayerState = "idle" | "playing" | "paused";
 const FRAME_DURATION_MS = 20;
 const MAX_VOLUME = 20;
 const DEFAULT_VOLUME = 8;
-const DUCKING_GAIN = 0.35;
 const DUCKING_FADE_OUT_MS = 160;
-const DUCKING_FADE_IN_MS = 420;
 
 export class AudioPlayer extends EventEmitter {
   private ffmpeg: ChildProcess | null = null;
@@ -109,6 +108,7 @@ export class AudioPlayer extends EventEmitter {
   private duckingActive = false;
   private duckingFactor = 1;
   private lastFrameAt = 0;
+  private duckingConfig: DuckingSettings = getDefaultDuckingSettings();
 
   constructor(logger: Logger) {
     super();
@@ -317,9 +317,15 @@ export class AudioPlayer extends EventEmitter {
   }
 
   private getVolumeFactor(): number {
-    const targetDuckingFactor = this.duckingActive ? DUCKING_GAIN : 1;
+    const targetDuckingFactor =
+      this.duckingConfig.enabled && this.duckingActive
+        ? this.duckingConfig.volumePercent / 100
+        : 1;
     if (this.duckingFactor !== targetDuckingFactor) {
-      const fadeMs = this.duckingActive ? DUCKING_FADE_OUT_MS : DUCKING_FADE_IN_MS;
+      const fadeMs =
+        this.duckingConfig.enabled && this.duckingActive
+          ? DUCKING_FADE_OUT_MS
+          : Math.max(1, this.duckingConfig.recoveryMs);
       const maxStep = FRAME_DURATION_MS / fadeMs;
       if (this.duckingFactor < targetDuckingFactor) {
         this.duckingFactor = Math.min(targetDuckingFactor, this.duckingFactor + maxStep);
@@ -396,6 +402,13 @@ export class AudioPlayer extends EventEmitter {
 
   setDuckingActive(active: boolean): void {
     this.duckingActive = active;
+  }
+
+  setDuckingConfig(config: DuckingSettings): void {
+    this.duckingConfig = { ...config };
+    if (!config.enabled) {
+      this.duckingActive = false;
+    }
   }
 
   getVolume(): number {

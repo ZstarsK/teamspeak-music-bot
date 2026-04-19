@@ -4,6 +4,7 @@ import type { BotDatabase } from "../../data/database.js";
 import type { MusicProvider } from "../../music/provider.js";
 import type { Logger } from "../../logger.js";
 import { parseCommand } from "../../bot/commands.js";
+import { chooseInitialQueueIndex } from "../../bot/instance.js";
 
 export function createPlayerRouter(
   botManager: BotManager,
@@ -257,7 +258,18 @@ export function createPlayerRouter(
   router.post("/:botId/play-playlist", async (req, res) => {
     try {
       const bot = (req as any).bot;
-      const { playlistId, platform } = req.body;
+      const { playlistId, platform, startIndex } = req.body;
+      if (
+        startIndex !== undefined &&
+        (
+          typeof startIndex !== "number" ||
+          !Number.isInteger(startIndex) ||
+          startIndex < 0
+        )
+      ) {
+        res.status(400).json({ error: "startIndex must be a non-negative integer" });
+        return;
+      }
       // Use the bot's own provider lookup — it already knows about youtube,
       // which the router's constructor params did not.
       const provider = bot.getProviderFor(
@@ -275,6 +287,10 @@ export function createPlayerRouter(
         res.json({ message: "Playlist is empty" });
         return;
       }
+      if (typeof startIndex === "number" && startIndex >= songs.length) {
+        res.status(400).json({ error: "startIndex is out of range" });
+        return;
+      }
 
       const queue = bot.getQueueManager();
       queue.clear();
@@ -282,15 +298,12 @@ export function createPlayerRouter(
         queue.add({ ...song, platform: provider.platform });
       }
 
-      // Use queue.play() for sequential, or pick random index for random modes
-      const mode = queue.getMode();
-      let first;
-      if (mode === "random" || mode === "rloop") {
-        const idx = Math.floor(Math.random() * queue.size());
-        first = queue.playAt(idx);
-      } else {
-        first = queue.play();
-      }
+      const initialIndex = chooseInitialQueueIndex({
+        mode: queue.getMode(),
+        queueSize: queue.size(),
+        ...(typeof startIndex === "number" ? { startIndex } : {}),
+      });
+      const first = initialIndex === null ? null : queue.playAt(initialIndex);
 
       if (first) {
         await bot.resolveAndPlay(first);

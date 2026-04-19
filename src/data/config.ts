@@ -1,6 +1,25 @@
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 
+export interface DuckingSettings {
+  enabled: boolean;
+  volumePercent: number;
+  recoveryMs: number;
+}
+
+export const DUCKING_VOLUME_PERCENT_MIN = 0;
+export const DUCKING_VOLUME_PERCENT_MAX = 100;
+export const DUCKING_RECOVERY_MS_MIN = 0;
+export const DUCKING_RECOVERY_MS_MAX = 10_000;
+
+export function getDefaultDuckingSettings(): DuckingSettings {
+  return {
+    enabled: true,
+    volumePercent: 35,
+    recoveryMs: 420,
+  };
+}
+
 export interface BotConfig {
   webPort: number;
   locale: "zh" | "en";
