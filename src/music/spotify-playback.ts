@@ -75,7 +75,7 @@ export function buildLibrespotArgs(params: {
   return [...args, "--access-token", params.accessToken];
 }
 
-export function shouldResetSpotifyPcmPipeline(params: {
+export function shouldRestartSpotifySidecarForTrackSwitch(params: {
   sameProcess: boolean;
   playbackStarted: boolean;
 }): boolean {
@@ -103,10 +103,12 @@ export class SpotifyPlaybackEngine {
   private readonly eventScriptPath: string;
   private readonly runtimeAudioCacheDir: string;
   private readonly runtimeSystemCacheDir: string;
-  private readonly deviceName: string;
+  private readonly baseDeviceName: string;
   private readonly logger: Logger;
   private lastExitDetail: { code: number | null; signal: NodeJS.Signals | null } | null = null;
   private playbackStarted = false;
+  private processLaunchId = 0;
+  private currentDeviceName: string;
 
   constructor(
     private provider: SpotifyProvider,
@@ -121,25 +123,23 @@ export class SpotifyPlaybackEngine {
     this.eventScriptPath = path.join(this.runtimeDir, "spotify-event.cjs");
     this.runtimeAudioCacheDir = path.join(this.runtimeDir, "audio-cache");
     this.runtimeSystemCacheDir = path.join(this.runtimeDir, "system-cache");
-    this.deviceName = `${this.config.spotifyDeviceName || "TSMusicBot Spotify"} ${safeBotId.slice(0, 8)}`;
+    this.baseDeviceName = `${this.config.spotifyDeviceName || "TSMusicBot Spotify"} ${safeBotId.slice(0, 8)}`;
+    this.currentDeviceName = this.baseDeviceName;
     this.logger = logger.child({ component: "spotify-playback" });
   }
 
   async play(song: Song, player: AudioPlayer, onEnd: () => void | Promise<void>): Promise<void> {
     const account = await this.provider.getPlaybackAccount(song.accountId);
     const trackUri = this.provider.getTrackUri(song.id);
-    const sameProcess = await this.ensureProcess(account, onEnd);
-    const deviceId = await this.waitForDevice(account.id);
+    const sameProcess = Boolean(this.librespot && !this.librespot.killed && this.activeAccountId === account.id);
+    if (shouldRestartSpotifySidecarForTrackSwitch({ sameProcess, playbackStarted: this.playbackStarted })) {
+      await this.restartForTrackSwitch(player);
+    }
+    await this.ensureProcess(account, onEnd);
+    const deviceId = await this.waitForDevice(account.id, this.currentDeviceName);
     this.activeAccountId = account.id;
     this.activeDeviceId = deviceId;
     this.activeTrackUri = trackUri;
-    const resetPcmPipeline = shouldResetSpotifyPcmPipeline({
-      sameProcess,
-      playbackStarted: this.playbackStarted,
-    });
-    if (resetPcmPipeline) {
-      await this.prepareForTrackSwitch(player);
-    }
     const pcmStream = this.librespot?.stdout;
     if (!pcmStream) {
       throw new Error("librespot PCM stdout is not available");
@@ -198,29 +198,15 @@ export class SpotifyPlaybackEngine {
     this.playbackStarted = false;
   }
 
-  private async prepareForTrackSwitch(player: AudioPlayer): Promise<void> {
-    const pcmStream = this.librespot?.stdout;
-    if (!pcmStream) return;
-    this.logger.info({ deviceId: this.activeDeviceId, trackUri: this.activeTrackUri }, "Preparing Spotify track switch");
-    try {
-      if (this.activeAccountId) {
-        await this.provider.pausePlayback(this.activeAccountId, this.activeDeviceId);
-      }
-    } catch (err) {
-      this.logger.warn({ err }, "Failed to pause Spotify playback before switching track");
-    }
+  private async restartForTrackSwitch(player: AudioPlayer): Promise<void> {
+    this.logger.info(
+      { deviceId: this.activeDeviceId, trackUri: this.activeTrackUri },
+      "Restarting Spotify sidecar for clean track switch",
+    );
     this.playbackStarted = false;
     player.stop({ skipCleanup: true });
-    pcmStream.unpipe?.();
-    pcmStream.pause();
+    this.shutdown();
     await sleep(150);
-    let drainedBytes = 0;
-    for (;;) {
-      const chunk = pcmStream.read() as Buffer | null;
-      if (!chunk) break;
-      drainedBytes += chunk.length;
-    }
-    this.logger.info({ drainedBytes }, "Spotify PCM buffer drained before switching track");
   }
 
   private ensureRuntimeFiles(): void {
@@ -254,14 +240,16 @@ export class SpotifyPlaybackEngine {
   private async ensureProcess(
     account: SpotifyAccountRecord,
     onEnd: () => void | Promise<void>,
-  ): Promise<boolean> {
+  ): Promise<void> {
     if (this.librespot && !this.librespot.killed && this.activeAccountId === account.id) {
       this.startEventWatcher(onEnd);
-      return true;
+      return;
     }
     this.shutdown();
     this.ensureRuntimeFiles();
     this.lastExitDetail = null;
+    this.processLaunchId += 1;
+    this.currentDeviceName = this.buildDeviceName(this.processLaunchId);
 
     const mode = getConfiguredSpotifyLibrespotAuthMode(this.config);
     const cachePaths = mode === "credentials-cache"
@@ -287,7 +275,7 @@ export class SpotifyPlaybackEngine {
 
     const args = buildLibrespotArgs({
       mode,
-      deviceName: this.deviceName,
+      deviceName: this.currentDeviceName,
       eventScriptPath: this.eventScriptPath,
       audioCacheDir: cachePaths.audioDir,
       systemCacheDir: cachePaths.systemDir,
@@ -298,42 +286,44 @@ export class SpotifyPlaybackEngine {
     this.logger.info(
       {
         bin,
-        deviceName: this.deviceName,
+        deviceName: this.currentDeviceName,
         authMode: mode,
         cacheDir: cachePaths.audioDir,
         systemCacheDir: cachePaths.systemDir,
       },
       "Starting librespot sidecar",
     );
-    this.librespot = spawn(bin, args, {
+    const child = spawn(bin, args, {
       stdio: ["ignore", "pipe", "pipe"],
       env: {
         ...process.env,
         SPOTIFY_EVENT_FILE: this.eventFilePath,
       },
     });
+    this.librespot = child;
     this.activeAccountId = account.id;
     this.activeDeviceId = null;
     this.playbackStarted = false;
 
-    this.librespot.stderr?.on("data", (chunk: Buffer) => {
+    child.stderr?.on("data", (chunk: Buffer) => {
       const message = chunk.toString().trimEnd();
       if (message) this.logger.info({ librespot: message }, "librespot stderr");
     });
 
-    this.librespot.on("error", (err) => {
+    child.on("error", (err) => {
       this.logger.error({ err, bin }, "librespot failed to start");
     });
 
-    this.librespot.on("close", (code, signal) => {
+    child.on("close", (code, signal) => {
       this.logger.warn({ code, signal }, "librespot sidecar closed");
-      this.librespot = null;
-      this.activeDeviceId = null;
+      if (this.librespot === child) {
+        this.librespot = null;
+        this.activeDeviceId = null;
+      }
       this.lastExitDetail = { code, signal };
     });
 
     this.startEventWatcher(onEnd);
-    return false;
   }
 
   private startEventWatcher(onEnd: () => void | Promise<void>): void {
@@ -380,7 +370,11 @@ export class SpotifyPlaybackEngine {
       .catch((err) => this.logger.error({ err }, "Spotify end-of-track handler failed"));
   }
 
-  private async waitForDevice(accountId: string): Promise<string> {
+  private buildDeviceName(launchId: number): string {
+    return `${this.baseDeviceName}-${launchId}`.slice(0, 80);
+  }
+
+  private async waitForDevice(accountId: string, deviceName: string): Promise<string> {
     if (this.activeDeviceId) return this.activeDeviceId;
     const deadline = Date.now() + DEVICE_WAIT_TIMEOUT_MS;
     while (Date.now() < deadline) {
@@ -390,13 +384,13 @@ export class SpotifyPlaybackEngine {
           `librespot exited before Spotify device appeared (code=${code ?? "null"}, signal=${signal ?? "null"})`,
         );
       }
-      const deviceId = await this.provider.findDeviceIdByName(this.deviceName, accountId);
+      const deviceId = await this.provider.findDeviceIdByName(deviceName, accountId);
       if (deviceId) {
         this.activeDeviceId = deviceId;
         return deviceId;
       }
       await sleep(DEVICE_WAIT_INTERVAL_MS);
     }
-    throw new Error(`Spotify device "${this.deviceName}" did not appear`);
+    throw new Error(`Spotify device "${deviceName}" did not appear`);
   }
 }

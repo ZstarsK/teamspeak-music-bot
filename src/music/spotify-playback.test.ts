@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildLibrespotArgs,
   getSpotifyLibrespotCachePaths,
-  shouldResetSpotifyPcmPipeline,
+  shouldRestartSpotifySidecarForTrackSwitch,
 } from "./spotify-playback.js";
 
 describe("spotify librespot helpers", () => {
@@ -47,9 +47,9 @@ describe("spotify librespot helpers", () => {
     expect(args[index + 1]).toBe("abc123");
   });
 
-  it("resets the PCM pipeline when switching tracks on the same active spotify process", () => {
-    expect(shouldResetSpotifyPcmPipeline({ sameProcess: true, playbackStarted: true })).toBe(true);
-    expect(shouldResetSpotifyPcmPipeline({ sameProcess: true, playbackStarted: false })).toBe(false);
-    expect(shouldResetSpotifyPcmPipeline({ sameProcess: false, playbackStarted: true })).toBe(false);
+  it("restarts the spotify sidecar when switching tracks on the same active process", () => {
+    expect(shouldRestartSpotifySidecarForTrackSwitch({ sameProcess: true, playbackStarted: true })).toBe(true);
+    expect(shouldRestartSpotifySidecarForTrackSwitch({ sameProcess: true, playbackStarted: false })).toBe(false);
+    expect(shouldRestartSpotifySidecarForTrackSwitch({ sameProcess: false, playbackStarted: true })).toBe(false);
   });
 });

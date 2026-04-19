@@ -1,4 +1,7 @@
+import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
+import { promises as fs } from "node:fs";
+import path from "node:path";
 import { Readable } from "node:stream";
 import axios from "axios";
 import { TS3Client, escapeTS3 } from "../ts-protocol/client.js";
@@ -12,6 +15,24 @@ const TS3_NICKNAME_MAX = 30;
 const AVATAR_MAX_BYTES = 200 * 1024;
 /** Timeout for file-transfer operations (upload / delete). */
 const FILE_TRANSFER_TIMEOUT_MS = 6000;
+const FLAG_IMAGE_MAX_BYTES = 8 * 1024 * 1024;
+const FLAG_CONVERT_TIMEOUT_MS = 10_000;
+const NOW_PLAYING_FLAG_PATH = process.env.TSMUSICBOT_FLAG_PATH || "/opt/teamspeak-flag/flag.png";
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+export function isPngBuffer(buffer: Buffer): boolean {
+  return buffer.length >= PNG_SIGNATURE.length && buffer.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE);
+}
+
+export function getImageDownloadHeaders(url: string): Record<string, string> {
+  if (url.includes("hdslb.com") || url.includes("bilibili.com")) {
+    return {
+      Referer: "https://www.bilibili.com/",
+      "User-Agent": "Mozilla/5.0",
+    };
+  }
+  return {};
+}
 
 /**
  * Manages the bot's TeamSpeak presence (avatar, description, nickname,
@@ -71,6 +92,9 @@ export class BotProfileManager {
    */
   async onSongChange(song: QueuedSong | null): Promise<void> {
     const gen = ++this.generation;
+    void this.updateNowPlayingFlag(song?.coverUrl ?? null, gen).catch((err) => {
+      this.logger.warn({ err }, "Now playing flag image export failed");
+    });
 
     // 1. Avatar first — file transfer uses its own response tracker and
     //    must run before sendCommandNoWait calls whose orphaned responses
@@ -145,6 +169,69 @@ export class BotProfileManager {
     } catch (err) {
       this.handleFeatureError("avatar", err);
     }
+  }
+
+  private async updateNowPlayingFlag(coverUrl: string | null, gen: number): Promise<void> {
+    if (!coverUrl) return;
+    const imageBuffer = await this.downloadImage(coverUrl, FLAG_IMAGE_MAX_BYTES);
+    if (!imageBuffer || imageBuffer.length === 0) return;
+    if (this.generation !== gen) return;
+    await this.writeNowPlayingFlagImage(imageBuffer, gen);
+  }
+
+  private async writeNowPlayingFlagImage(imageBuffer: Buffer, gen: number): Promise<void> {
+    const outputPath = NOW_PLAYING_FLAG_PATH;
+    const outputDir = path.dirname(outputPath);
+    const token = `${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const tmpSourcePath = path.join(outputDir, `.flag-${token}.source`);
+    const tmpOutputPath = path.join(outputDir, `.flag-${token}.png`);
+
+    await fs.mkdir(outputDir, { recursive: true });
+    try {
+      if (isPngBuffer(imageBuffer)) {
+        await fs.writeFile(tmpOutputPath, imageBuffer);
+      } else {
+        await fs.writeFile(tmpSourcePath, imageBuffer);
+        await this.convertImageToPng(tmpSourcePath, tmpOutputPath);
+      }
+
+      if (this.generation !== gen) return;
+      await fs.rename(tmpOutputPath, outputPath);
+      this.logger.info({ path: outputPath, bytes: imageBuffer.length }, "Now playing flag image updated");
+    } finally {
+      await fs.rm(tmpSourcePath, { force: true }).catch(() => {});
+      await fs.rm(tmpOutputPath, { force: true }).catch(() => {});
+    }
+  }
+
+  private async convertImageToPng(inputPath: string, outputPath: string): Promise<void> {
+    await this.withTimeout(
+      new Promise<void>((resolve, reject) => {
+        const ffmpeg = spawn("ffmpeg", [
+          "-y",
+          "-loglevel", "error",
+          "-i", inputPath,
+          "-frames:v", "1",
+          outputPath,
+        ], {
+          stdio: ["ignore", "ignore", "pipe"],
+        });
+
+        let stderr = "";
+        ffmpeg.stderr?.on("data", (chunk: Buffer) => {
+          stderr += chunk.toString();
+        });
+        ffmpeg.on("error", reject);
+        ffmpeg.on("close", (code) => {
+          if (code === 0) {
+            resolve();
+            return;
+          }
+          reject(new Error(`ffmpeg image convert failed with code ${code}: ${stderr.trim()}`));
+        });
+      }),
+      FLAG_CONVERT_TIMEOUT_MS,
+    );
   }
 
   /**
@@ -384,12 +471,13 @@ export class BotProfileManager {
     return url;
   }
 
-  private async downloadImage(url: string): Promise<Buffer | null> {
+  private async downloadImage(url: string, maxBytes = 2 * 1024 * 1024): Promise<Buffer | null> {
     try {
       const resp = await axios.get(url, {
         responseType: "arraybuffer",
         timeout: 8000,
-        maxContentLength: 2 * 1024 * 1024, // 2 MB cap
+        maxContentLength: maxBytes,
+        headers: getImageDownloadHeaders(url),
       });
       return Buffer.from(resp.data);
     } catch (err) {
