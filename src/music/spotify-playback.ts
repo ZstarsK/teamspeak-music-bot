@@ -55,7 +55,7 @@ export function buildLibrespotArgs(params: {
   const args = [
     "--name", params.deviceName,
     "--backend", "pipe",
-    "--format", "S16",
+    "--passthrough",
     "--cache", params.audioCacheDir,
     "--system-cache", params.systemCacheDir,
     "--bitrate", "320",
@@ -75,11 +75,11 @@ export function buildLibrespotArgs(params: {
   return [...args, "--access-token", params.accessToken];
 }
 
-export function shouldRestartSpotifySidecarForTrackSwitch(params: {
+export function shouldReuseSpotifyStreamForTrackSwitch(params: {
   sameProcess: boolean;
-  playbackStarted: boolean;
+  playerState: "idle" | "playing" | "paused";
 }): boolean {
-  return params.sameProcess && params.playbackStarted;
+  return params.sameProcess && params.playerState !== "idle";
 }
 
 function directoryHasFiles(dir: string): boolean {
@@ -109,6 +109,9 @@ export class SpotifyPlaybackEngine {
   private playbackStarted = false;
   private processLaunchId = 0;
   private currentDeviceName: string;
+  private attachedPlayer: AudioPlayer | null = null;
+  private streamAttached = false;
+  private activeTrackId: string | null = null;
 
   constructor(
     private provider: SpotifyProvider,
@@ -131,28 +134,29 @@ export class SpotifyPlaybackEngine {
   async play(song: Song, player: AudioPlayer, onEnd: () => void | Promise<void>): Promise<void> {
     const account = await this.provider.getPlaybackAccount(song.accountId);
     const trackUri = this.provider.getTrackUri(song.id);
+    const playerState = player.getState();
     const sameProcess = Boolean(this.librespot && !this.librespot.killed && this.activeAccountId === account.id);
-    if (shouldRestartSpotifySidecarForTrackSwitch({ sameProcess, playbackStarted: this.playbackStarted })) {
-      await this.restartForTrackSwitch(player);
-    }
     await this.ensureProcess(account, onEnd);
+    const reusingStream = shouldReuseSpotifyStreamForTrackSwitch({
+      sameProcess,
+      playerState,
+    }) && this.streamAttached && this.attachedPlayer === player;
+    if (!reusingStream) {
+      this.attachPlayerToStream(player);
+    } else {
+      this.logger.info(
+        { deviceId: this.activeDeviceId, trackUri: this.activeTrackUri, playerState },
+        "Reusing existing Spotify encoded stream",
+      );
+      if (playerState === "paused") {
+        player.resume();
+      }
+    }
     const deviceId = await this.waitForDevice(account.id, this.currentDeviceName);
     this.activeAccountId = account.id;
     this.activeDeviceId = deviceId;
     this.activeTrackUri = trackUri;
-    const pcmStream = this.librespot?.stdout;
-    if (!pcmStream) {
-      throw new Error("librespot PCM stdout is not available");
-    }
-    player.playPcmStream(pcmStream, {
-      inputSampleRate: 44100,
-      cleanup: () => {
-        if (!this.playbackStarted) return;
-        this.pause().catch((err) => {
-          this.logger.warn({ err }, "Failed to pause Spotify playback during cleanup");
-        });
-      },
-    });
+    this.activeTrackId = song.id;
     try {
       await this.provider.startPlayback({
         accountId: account.id,
@@ -195,18 +199,10 @@ export class SpotifyPlaybackEngine {
     this.activeAccountId = null;
     this.activeDeviceId = null;
     this.activeTrackUri = null;
+    this.activeTrackId = null;
     this.playbackStarted = false;
-  }
-
-  private async restartForTrackSwitch(player: AudioPlayer): Promise<void> {
-    this.logger.info(
-      { deviceId: this.activeDeviceId, trackUri: this.activeTrackUri },
-      "Restarting Spotify sidecar for clean track switch",
-    );
-    this.playbackStarted = false;
-    player.stop({ skipCleanup: true });
-    this.shutdown();
-    await sleep(150);
+    this.attachedPlayer = null;
+    this.streamAttached = false;
   }
 
   private ensureRuntimeFiles(): void {
@@ -303,7 +299,11 @@ export class SpotifyPlaybackEngine {
     this.librespot = child;
     this.activeAccountId = account.id;
     this.activeDeviceId = null;
+    this.activeTrackUri = null;
+    this.activeTrackId = null;
     this.playbackStarted = false;
+    this.attachedPlayer = null;
+    this.streamAttached = false;
 
     child.stderr?.on("data", (chunk: Buffer) => {
       const message = chunk.toString().trimEnd();
@@ -319,6 +319,8 @@ export class SpotifyPlaybackEngine {
       if (this.librespot === child) {
         this.librespot = null;
         this.activeDeviceId = null;
+        this.attachedPlayer = null;
+        this.streamAttached = false;
       }
       this.lastExitDetail = { code, signal };
     });
@@ -345,12 +347,20 @@ export class SpotifyPlaybackEngine {
         this.eventOffset = stat.size;
         for (const line of buffer.toString("utf-8").split("\n")) {
           if (!line.trim()) continue;
-          const event = JSON.parse(line) as { PLAYER_EVENT?: string; TRACK_ID?: string };
+          const event = JSON.parse(line) as { PLAYER_EVENT?: string; TRACK_ID?: string; URI?: string };
           if (event.PLAYER_EVENT === "end_of_track") {
-            this.handleTrackEnd(onEnd);
+            if (this.isEventForActiveTrack(event)) {
+              this.handleTrackEnd(onEnd);
+            } else {
+              this.logger.debug({ event, activeTrackUri: this.activeTrackUri }, "Ignoring stale Spotify end_of_track event");
+            }
           } else if (event.PLAYER_EVENT === "unavailable") {
-            this.logger.warn({ event }, "Spotify track unavailable");
-            this.handleTrackEnd(onEnd);
+            if (this.isEventForActiveTrack(event)) {
+              this.logger.warn({ event }, "Spotify track unavailable");
+              this.handleTrackEnd(onEnd);
+            } else {
+              this.logger.debug({ event, activeTrackUri: this.activeTrackUri }, "Ignoring stale Spotify unavailable event");
+            }
           }
         }
       } finally {
@@ -365,9 +375,43 @@ export class SpotifyPlaybackEngine {
     const now = Date.now();
     if (now - this.lastEndAt < 1000) return;
     this.lastEndAt = now;
+    this.playbackStarted = false;
+    this.activeTrackUri = null;
+    this.activeTrackId = null;
     Promise.resolve()
       .then(() => onEnd())
       .catch((err) => this.logger.error({ err }, "Spotify end-of-track handler failed"));
+  }
+
+  private attachPlayerToStream(player: AudioPlayer): void {
+    const encodedStream = this.librespot?.stdout;
+    if (!encodedStream) {
+      throw new Error("librespot encoded stdout is not available");
+    }
+    player.playEncodedStream(encodedStream, {
+      inputFormat: "ogg",
+      cleanup: () => {
+        if (!this.playbackStarted) return;
+        this.pause().catch((err) => {
+          this.logger.warn({ err }, "Failed to pause Spotify playback during cleanup");
+        });
+      },
+    });
+    this.attachedPlayer = player;
+    this.streamAttached = true;
+  }
+
+  private isEventForActiveTrack(event: { TRACK_ID?: string; URI?: string }): boolean {
+    if (!this.activeTrackUri && !this.activeTrackId) {
+      return false;
+    }
+    if (event.URI) {
+      return event.URI === this.activeTrackUri;
+    }
+    if (event.TRACK_ID) {
+      return event.TRACK_ID === this.activeTrackId;
+    }
+    return false;
   }
 
   private buildDeviceName(launchId: number): string {

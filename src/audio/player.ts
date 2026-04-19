@@ -233,6 +233,41 @@ export class AudioPlayer extends EventEmitter {
     });
   }
 
+  playEncodedStream(
+    input: NodeJS.ReadableStream,
+    options: {
+      inputFormat?: string;
+      seekSeconds?: number;
+      cleanup?: () => void | Promise<void>;
+    } = {},
+  ): void {
+    const seekSeconds = options.seekSeconds ?? 0;
+    const args: string[] = [];
+    if (seekSeconds > 0) {
+      args.push("-ss", String(seekSeconds));
+    }
+    if (options.inputFormat) {
+      args.push("-f", options.inputFormat);
+    }
+    args.push(
+      "-i", "pipe:0",
+      "-f", "s16le",
+      "-ar", "48000",
+      "-ac", "2",
+      "-acodec", "pcm_s16le",
+      "-",
+    );
+
+    this.playWithFfmpegArgs(args, {
+      source: "encoded-stream",
+      display: options.inputFormat ? `stdin:${options.inputFormat}` : "stdin:auto",
+      currentUrl: "pipe:stdin",
+      seekSeconds,
+      cleanup: options.cleanup,
+      stdin: input,
+    });
+  }
+
   private playWithFfmpegArgs(
     args: string[],
     options: {
@@ -295,7 +330,13 @@ export class AudioPlayer extends EventEmitter {
     });
 
     let gotFirstData = false;
-    const noDataTimer = options.source === "pcm-stream" || options.source === "pcm-pipe"
+    const noDataTimeoutMs =
+      options.source === "encoded-stream"
+        ? 30_000
+        : options.source === "pcm-stream" || options.source === "pcm-pipe"
+          ? 20_000
+          : 0;
+    const noDataTimer = noDataTimeoutMs > 0
       ? setTimeout(() => {
         if (this.sessionId !== playSessionId || gotFirstData || this.state !== "playing") return;
         const err = new Error(`No PCM data received from ${options.source}`);
@@ -303,7 +344,7 @@ export class AudioPlayer extends EventEmitter {
         this.spawnFailed = true;
         this.ffmpeg?.kill("SIGTERM");
         this.emit("error", err);
-      }, 20_000)
+      }, noDataTimeoutMs)
       : null;
     this.ffmpeg.stdout!.on("data", (chunk: Buffer) => {
       if (!gotFirstData) {

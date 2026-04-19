@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildLibrespotArgs,
   getSpotifyLibrespotCachePaths,
-  shouldRestartSpotifySidecarForTrackSwitch,
+  shouldReuseSpotifyStreamForTrackSwitch,
 } from "./spotify-playback.js";
 
 describe("spotify librespot helpers", () => {
@@ -29,6 +29,7 @@ describe("spotify librespot helpers", () => {
     expect(args).toContain("--system-cache");
     expect(args).toContain("/tmp/system-cache");
     expect(args).toContain("--disable-discovery");
+    expect(args).toContain("--passthrough");
     expect(args).not.toContain("--access-token");
   });
 
@@ -47,9 +48,10 @@ describe("spotify librespot helpers", () => {
     expect(args[index + 1]).toBe("abc123");
   });
 
-  it("restarts the spotify sidecar when switching tracks on the same active process", () => {
-    expect(shouldRestartSpotifySidecarForTrackSwitch({ sameProcess: true, playbackStarted: true })).toBe(true);
-    expect(shouldRestartSpotifySidecarForTrackSwitch({ sameProcess: true, playbackStarted: false })).toBe(false);
-    expect(shouldRestartSpotifySidecarForTrackSwitch({ sameProcess: false, playbackStarted: true })).toBe(false);
+  it("reuses the spotify sidecar when the local player is still attached", () => {
+    expect(shouldReuseSpotifyStreamForTrackSwitch({ sameProcess: true, playerState: "playing" })).toBe(true);
+    expect(shouldReuseSpotifyStreamForTrackSwitch({ sameProcess: true, playerState: "paused" })).toBe(true);
+    expect(shouldReuseSpotifyStreamForTrackSwitch({ sameProcess: true, playerState: "idle" })).toBe(false);
+    expect(shouldReuseSpotifyStreamForTrackSwitch({ sameProcess: false, playerState: "playing" })).toBe(false);
   });
 });
