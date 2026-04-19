@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildLibrespotArgs,
   getSpotifyLibrespotCachePaths,
+  isLibrespotAudioReadyEvent,
   shouldReuseSpotifyStreamForTrackSwitch,
 } from "./spotify-playback.js";
 
@@ -75,5 +76,35 @@ describe("spotify librespot helpers", () => {
     expect(shouldReuseSpotifyStreamForTrackSwitch({ sameProcess: true, playerState: "paused", outputMode: "pcm" })).toBe(true);
     expect(shouldReuseSpotifyStreamForTrackSwitch({ sameProcess: true, playerState: "idle", outputMode: "pcm" })).toBe(false);
     expect(shouldReuseSpotifyStreamForTrackSwitch({ sameProcess: false, playerState: "playing", outputMode: "encoded" })).toBe(false);
+  });
+
+  it("matches librespot audio-ready events for the target track", () => {
+    expect(isLibrespotAudioReadyEvent(
+      { PLAYER_EVENT: "playing", TRACK_ID: "abc", POSITION_MS: "1200" },
+      { trackId: "abc" },
+    )).toBe(true);
+    expect(isLibrespotAudioReadyEvent(
+      { PLAYER_EVENT: "loading", TRACK_ID: "abc" },
+      { trackId: "abc" },
+    )).toBe(false);
+    expect(isLibrespotAudioReadyEvent(
+      { PLAYER_EVENT: "playing", TRACK_ID: "old", POSITION_MS: "1200" },
+      { trackId: "abc" },
+    )).toBe(false);
+  });
+
+  it("requires seek events to be close to the target position", () => {
+    expect(isLibrespotAudioReadyEvent(
+      { PLAYER_EVENT: "seeked", TRACK_ID: "abc", POSITION_MS: "30200" },
+      { trackId: "abc", targetProgressMs: 30_000 },
+    )).toBe(true);
+    expect(isLibrespotAudioReadyEvent(
+      { PLAYER_EVENT: "seeked", TRACK_ID: "abc", POSITION_MS: "90000" },
+      { trackId: "abc", targetProgressMs: 30_000 },
+    )).toBe(false);
+    expect(isLibrespotAudioReadyEvent(
+      { PLAYER_EVENT: "started", TRACK_ID: "abc" },
+      { trackId: "abc", targetProgressMs: 30_000 },
+    )).toBe(false);
   });
 });
