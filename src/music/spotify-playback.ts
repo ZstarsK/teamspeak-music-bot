@@ -2,10 +2,14 @@ import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import type { AudioPlayer } from "../audio/player.js";
-import type { BotConfig } from "../data/config.js";
+import {
+  getConfiguredSpotifyLibrespotAuthMode,
+  type BotConfig,
+  type SpotifyLibrespotAuthMode,
+} from "../data/config.js";
 import type { Logger } from "../logger.js";
 import type { Song } from "./provider.js";
-import { SpotifyProvider } from "./spotify.js";
+import { SpotifyProvider, type SpotifyAccountRecord } from "./spotify.js";
 
 const DEVICE_WAIT_TIMEOUT_MS = 12_000;
 const DEVICE_WAIT_INTERVAL_MS = 750;
@@ -19,6 +23,66 @@ function sanitizeName(input: string): string {
   return input.replace(/[^a-zA-Z0-9_.-]/g, "_").slice(0, 80);
 }
 
+export interface SpotifyLibrespotCachePaths {
+  accountKey: string;
+  baseDir: string;
+  audioDir: string;
+  systemDir: string;
+}
+
+export function getSpotifyLibrespotCachePaths(
+  cacheBaseDir: string,
+  account: Pick<SpotifyAccountRecord, "userId">,
+): SpotifyLibrespotCachePaths {
+  const accountKey = sanitizeName(account.userId);
+  const baseDir = path.join(cacheBaseDir, "accounts", accountKey);
+  return {
+    accountKey,
+    baseDir,
+    audioDir: path.join(baseDir, "audio-cache"),
+    systemDir: path.join(baseDir, "system-cache"),
+  };
+}
+
+export function buildLibrespotArgs(params: {
+  mode: SpotifyLibrespotAuthMode;
+  deviceName: string;
+  eventScriptPath: string;
+  audioCacheDir: string;
+  systemCacheDir: string;
+  accessToken?: string;
+}): string[] {
+  const args = [
+    "--name", params.deviceName,
+    "--backend", "pipe",
+    "--format", "S16",
+    "--cache", params.audioCacheDir,
+    "--system-cache", params.systemCacheDir,
+    "--bitrate", "320",
+    "--onevent", params.eventScriptPath,
+    "--mixer", "softvol",
+    "--volume-ctrl", "fixed",
+    "--initial-volume", "100",
+    "--disable-discovery",
+  ];
+
+  if (params.mode === "credentials-cache") {
+    return args;
+  }
+  if (!params.accessToken) {
+    throw new Error("Spotify access token is required for librespot access-token mode");
+  }
+  return [...args, "--access-token", params.accessToken];
+}
+
+function directoryHasFiles(dir: string): boolean {
+  try {
+    return fs.existsSync(dir) && fs.readdirSync(dir).length > 0;
+  } catch {
+    return false;
+  }
+}
+
 export class SpotifyPlaybackEngine {
   private librespot: ChildProcess | null = null;
   private watcher: ReturnType<typeof setInterval> | null = null;
@@ -30,9 +94,12 @@ export class SpotifyPlaybackEngine {
   private readonly runtimeDir: string;
   private readonly eventFilePath: string;
   private readonly eventScriptPath: string;
-  private readonly cacheDir: string;
+  private readonly runtimeAudioCacheDir: string;
+  private readonly runtimeSystemCacheDir: string;
   private readonly deviceName: string;
   private readonly logger: Logger;
+  private lastExitDetail: { code: number | null; signal: NodeJS.Signals | null } | null = null;
+  private playbackStarted = false;
 
   constructor(
     private provider: SpotifyProvider,
@@ -45,7 +112,8 @@ export class SpotifyPlaybackEngine {
     this.runtimeDir = path.join(cacheBaseDir, safeBotId);
     this.eventFilePath = path.join(this.runtimeDir, "events.jsonl");
     this.eventScriptPath = path.join(this.runtimeDir, "spotify-event.cjs");
-    this.cacheDir = path.join(this.runtimeDir, "cache");
+    this.runtimeAudioCacheDir = path.join(this.runtimeDir, "audio-cache");
+    this.runtimeSystemCacheDir = path.join(this.runtimeDir, "system-cache");
     this.deviceName = `${this.config.spotifyDeviceName || "TSMusicBot Spotify"} ${safeBotId.slice(0, 8)}`;
     this.logger = logger.child({ component: "spotify-playback" });
   }
@@ -53,7 +121,11 @@ export class SpotifyPlaybackEngine {
   async play(song: Song, player: AudioPlayer, onEnd: () => void | Promise<void>): Promise<void> {
     const account = await this.provider.getPlaybackAccount(song.accountId);
     const trackUri = this.provider.getTrackUri(song.id);
-    await this.ensureProcess(account.id, account.accessToken, onEnd);
+    await this.ensureProcess(account, onEnd);
+    const deviceId = await this.waitForDevice(account.id);
+    this.activeAccountId = account.id;
+    this.activeDeviceId = deviceId;
+    this.activeTrackUri = trackUri;
     const pcmStream = this.librespot?.stdout;
     if (!pcmStream) {
       throw new Error("librespot PCM stdout is not available");
@@ -61,20 +133,24 @@ export class SpotifyPlaybackEngine {
     player.playPcmStream(pcmStream, {
       inputSampleRate: 44100,
       cleanup: () => {
+        if (!this.playbackStarted) return;
         this.pause().catch((err) => {
           this.logger.warn({ err }, "Failed to pause Spotify playback during cleanup");
         });
       },
     });
-    const deviceId = await this.waitForDevice(account.id);
-    this.activeAccountId = account.id;
-    this.activeDeviceId = deviceId;
-    this.activeTrackUri = trackUri;
-    await this.provider.startPlayback({
-      accountId: account.id,
-      deviceId,
-      trackUri,
-    });
+    try {
+      await this.provider.startPlayback({
+        accountId: account.id,
+        deviceId,
+        trackUri,
+      });
+      this.playbackStarted = true;
+    } catch (err) {
+      this.playbackStarted = false;
+      player.stop();
+      throw err;
+    }
     this.logger.info({ trackUri, deviceId }, "Spotify playback started");
   }
 
@@ -105,11 +181,13 @@ export class SpotifyPlaybackEngine {
     this.activeAccountId = null;
     this.activeDeviceId = null;
     this.activeTrackUri = null;
+    this.playbackStarted = false;
   }
 
   private ensureRuntimeFiles(): void {
     fs.mkdirSync(this.runtimeDir, { recursive: true, mode: 0o700 });
-    fs.mkdirSync(this.cacheDir, { recursive: true, mode: 0o700 });
+    fs.mkdirSync(this.runtimeAudioCacheDir, { recursive: true, mode: 0o700 });
+    fs.mkdirSync(this.runtimeSystemCacheDir, { recursive: true, mode: 0o700 });
     fs.writeFileSync(
       this.eventScriptPath,
       [
@@ -135,33 +213,59 @@ export class SpotifyPlaybackEngine {
   }
 
   private async ensureProcess(
-    accountId: string,
-    accessToken: string,
+    account: SpotifyAccountRecord,
     onEnd: () => void | Promise<void>,
   ): Promise<void> {
-    if (this.librespot && !this.librespot.killed && this.activeAccountId === accountId) {
+    if (this.librespot && !this.librespot.killed && this.activeAccountId === account.id) {
       this.startEventWatcher(onEnd);
       return;
     }
     this.shutdown();
     this.ensureRuntimeFiles();
+    this.lastExitDetail = null;
 
-    const args = [
-      "--name", this.deviceName,
-      "--backend", "pipe",
-      "--format", "S16",
-      "--cache", this.cacheDir,
-      "--bitrate", "320",
-      "--access-token", accessToken,
-      "--onevent", this.eventScriptPath,
-      "--mixer", "softvol",
-      "--volume-ctrl", "fixed",
-      "--initial-volume", "100",
-      "--quiet",
-    ];
+    const mode = getConfiguredSpotifyLibrespotAuthMode(this.config);
+    const cachePaths = mode === "credentials-cache"
+      ? getSpotifyLibrespotCachePaths(path.dirname(this.runtimeDir), account)
+      : {
+          accountKey: sanitizeName(account.userId),
+          baseDir: this.runtimeDir,
+          audioDir: this.runtimeAudioCacheDir,
+          systemDir: this.runtimeSystemCacheDir,
+        };
+
+    if (mode === "credentials-cache") {
+      fs.mkdirSync(cachePaths.audioDir, { recursive: true, mode: 0o700 });
+      fs.mkdirSync(cachePaths.systemDir, { recursive: true, mode: 0o700 });
+      if (!directoryHasFiles(cachePaths.systemDir) && !directoryHasFiles(cachePaths.audioDir)) {
+        throw new Error(
+          `Spotify credentials cache not found for ${account.displayName || account.userId}. ` +
+          `Expected cache under ${cachePaths.baseDir}. ` +
+          "Run librespot OAuth login once to seed the local cache.",
+        );
+      }
+    }
+
+    const args = buildLibrespotArgs({
+      mode,
+      deviceName: this.deviceName,
+      eventScriptPath: this.eventScriptPath,
+      audioCacheDir: cachePaths.audioDir,
+      systemCacheDir: cachePaths.systemDir,
+      ...(mode === "access-token" ? { accessToken: account.accessToken } : {}),
+    });
 
     const bin = this.config.spotifyLibrespotPath || "librespot";
-    this.logger.info({ bin, deviceName: this.deviceName }, "Starting librespot sidecar");
+    this.logger.info(
+      {
+        bin,
+        deviceName: this.deviceName,
+        authMode: mode,
+        cacheDir: cachePaths.audioDir,
+        systemCacheDir: cachePaths.systemDir,
+      },
+      "Starting librespot sidecar",
+    );
     this.librespot = spawn(bin, args, {
       stdio: ["ignore", "pipe", "pipe"],
       env: {
@@ -169,12 +273,13 @@ export class SpotifyPlaybackEngine {
         SPOTIFY_EVENT_FILE: this.eventFilePath,
       },
     });
-    this.activeAccountId = accountId;
+    this.activeAccountId = account.id;
     this.activeDeviceId = null;
+    this.playbackStarted = false;
 
     this.librespot.stderr?.on("data", (chunk: Buffer) => {
       const message = chunk.toString().trimEnd();
-      if (message) this.logger.debug({ librespot: message }, "librespot stderr");
+      if (message) this.logger.info({ librespot: message }, "librespot stderr");
     });
 
     this.librespot.on("error", (err) => {
@@ -185,6 +290,7 @@ export class SpotifyPlaybackEngine {
       this.logger.warn({ code, signal }, "librespot sidecar closed");
       this.librespot = null;
       this.activeDeviceId = null;
+      this.lastExitDetail = { code, signal };
     });
 
     this.startEventWatcher(onEnd);
@@ -238,6 +344,12 @@ export class SpotifyPlaybackEngine {
     if (this.activeDeviceId) return this.activeDeviceId;
     const deadline = Date.now() + DEVICE_WAIT_TIMEOUT_MS;
     while (Date.now() < deadline) {
+      if (!this.librespot && this.lastExitDetail) {
+        const { code, signal } = this.lastExitDetail;
+        throw new Error(
+          `librespot exited before Spotify device appeared (code=${code ?? "null"}, signal=${signal ?? "null"})`,
+        );
+      }
       const deviceId = await this.provider.findDeviceIdByName(this.deviceName, accountId);
       if (deviceId) {
         this.activeDeviceId = deviceId;

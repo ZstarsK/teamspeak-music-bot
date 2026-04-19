@@ -7,6 +7,9 @@ export interface DuckingSettings {
   recoveryMs: number;
 }
 
+export const SPOTIFY_LIBRESPOT_AUTH_MODES = ["access-token", "credentials-cache"] as const;
+export type SpotifyLibrespotAuthMode = typeof SPOTIFY_LIBRESPOT_AUTH_MODES[number];
+
 export const DEFAULT_MAX_VOLUME = 20;
 export const MAX_VOLUME_CONFIG_MIN = 1;
 export const MAX_VOLUME_CONFIG_MAX = 100;
@@ -50,6 +53,7 @@ export interface BotConfig {
   spotifyRedirectUri: string;
   spotifyLibrespotPath: string;
   spotifyDeviceName: string;
+  spotifyLibrespotAuthMode: SpotifyLibrespotAuthMode;
 }
 
 export function getDefaultConfig(): BotConfig {
@@ -74,6 +78,7 @@ export function getDefaultConfig(): BotConfig {
     spotifyRedirectUri: "",
     spotifyLibrespotPath: "librespot",
     spotifyDeviceName: "TSMusicBot Spotify",
+    spotifyLibrespotAuthMode: "access-token",
   };
 }
 
@@ -86,6 +91,13 @@ export function getConfiguredMaxVolume(config?: Partial<BotConfig> | null): numb
     MAX_VOLUME_CONFIG_MIN,
     Math.min(MAX_VOLUME_CONFIG_MAX, Math.round(raw)),
   );
+}
+
+export function getConfiguredSpotifyLibrespotAuthMode(
+  config?: Partial<BotConfig> | null,
+): SpotifyLibrespotAuthMode {
+  const raw = config?.spotifyLibrespotAuthMode;
+  return raw === "credentials-cache" ? raw : "access-token";
 }
 
 export function loadConfig(path: string): BotConfig {

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { lookup } from "node:dns/promises";
 import net from "node:net";
 import path from "node:path";
@@ -10,6 +10,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, "..");
 const configPath = path.join(rootDir, "config.json");
 const spotifyStatePath = path.join(rootDir, "data", "cookies", "spotify.json");
+const spotifyLibrespotBaseDir = path.join(rootDir, "data", "spotify-librespot");
 const timeoutMs = Number(process.env.SPOTIFY_CHECK_TIMEOUT_MS ?? 8000);
 
 function readJson(file) {
@@ -25,6 +26,33 @@ function readJson(file) {
 function print(ok, label, detail = "") {
   const prefix = ok ? "OK  " : "FAIL";
   console.log(`${prefix} ${label}${detail ? ` - ${detail}` : ""}`);
+}
+
+function sanitizeName(input) {
+  return String(input ?? "").replace(/[^a-zA-Z0-9_.-]/g, "_").slice(0, 80);
+}
+
+function getAccountCachePaths(userId) {
+  const accountKey = sanitizeName(userId);
+  const baseDir = path.join(spotifyLibrespotBaseDir, "accounts", accountKey);
+  return {
+    accountKey,
+    baseDir,
+    audioDir: path.join(baseDir, "audio-cache"),
+    systemDir: path.join(baseDir, "system-cache"),
+  };
+}
+
+function hasFiles(dir) {
+  try {
+    return existsSync(dir) && readdirSync(dir).length > 0;
+  } catch {
+    return false;
+  }
+}
+
+function run(bin, args) {
+  return spawnSync(bin, args, { encoding: "utf-8", timeout: timeoutMs, maxBuffer: 1024 * 1024 });
 }
 
 async function withTimeout(promise, label) {
@@ -115,6 +143,12 @@ async function getAccessToken(config, state) {
   return data.access_token ?? account.accessToken ?? null;
 }
 
+function getPrimaryAccount(state) {
+  const primaryId = state?.primaryId;
+  const accounts = Array.isArray(state?.accounts) ? state.accounts : [];
+  return accounts.find((item) => item.id === primaryId) ?? accounts[0] ?? null;
+}
+
 async function postFetch(label, url, headers, body) {
   try {
     const res = await withTimeout(
@@ -133,9 +167,26 @@ async function main() {
   const config = readJson(configPath) ?? {};
   const spotifyState = readJson(spotifyStatePath);
   const librespot = config.spotifyLibrespotPath || "librespot";
+  const cargoLibrespot = process.env.HOME ? path.join(process.env.HOME, ".cargo", "bin", "librespot") : "";
+  const authMode = config.spotifyLibrespotAuthMode === "credentials-cache" ? "credentials-cache" : "access-token";
+  const primaryAccount = getPrimaryAccount(spotifyState);
+  const primaryCache = primaryAccount?.userId ? getAccountCachePaths(primaryAccount.userId) : null;
 
   console.log(`cwd: ${rootDir}`);
   console.log(`librespot: ${librespot}`);
+  console.log(`librespot auth mode: ${authMode}`);
+  const pathLookup = run("sh", ["-lc", "command -v librespot || true"]);
+  console.log(`PATH librespot: ${(pathLookup.stdout || "").trim() || "(not found)"}`);
+  if (cargoLibrespot) {
+    console.log(`cargo librespot: ${existsSync(cargoLibrespot) ? cargoLibrespot : "(not found)"}`);
+  }
+  if (primaryAccount) {
+    console.log(`spotify primary account: ${primaryAccount.id} (${primaryAccount.userId})`);
+  }
+  if (primaryCache) {
+    console.log(`spotify credentials cache: ${primaryCache.baseDir}`);
+    print(hasFiles(primaryCache.systemDir) || hasFiles(primaryCache.audioDir), "spotify credentials cache present", primaryCache.systemDir);
+  }
 
   for (const host of ["accounts.spotify.com", "api.spotify.com", "apresolve.spotify.com"]) {
     await testDns(host);
@@ -166,13 +217,18 @@ async function main() {
     }
   }
 
-  const version = spawnSync(librespot, ["--version"], { encoding: "utf-8", timeout: timeoutMs });
+  const version = run(librespot, ["--version"]);
   print(version.status === 0, "librespot --version", (version.stdout || version.stderr || "").trim());
 
-  const help = spawnSync(librespot, ["--help"], { encoding: "utf-8", timeout: timeoutMs });
+  const help = run(librespot, ["--help"]);
   const helpText = `${help.stdout}\n${help.stderr}`;
   for (const flag of ["--backend", "--access-token", "--onevent"]) {
-    print(help.status === 0 && helpText.includes(flag), `librespot supports ${flag}`);
+    print(helpText.includes(flag), `librespot supports ${flag}`);
+  }
+
+  if (cargoLibrespot && existsSync(cargoLibrespot) && cargoLibrespot !== librespot) {
+    const cargoVersion = run(cargoLibrespot, ["--version"]);
+    print(cargoVersion.status === 0, "cargo librespot --version", (cargoVersion.stdout || cargoVersion.stderr || "").trim());
   }
 
   const token = await getAccessToken(config, spotifyState);
@@ -190,11 +246,17 @@ async function main() {
 
   if (process.env.SPOTIFY_LIBRESPOT_PROBE === "1") {
     console.log("Starting optional librespot probe for 12 seconds...");
-    const probe = spawnSync(
-      librespot,
-      ["--name", "TSMusicBot Network Probe", "--backend", "pipe", "--access-token", token, "--quiet"],
-      { encoding: "utf-8", timeout: 12000, maxBuffer: 1024 * 1024 },
-    );
+    const probeArgs = [
+      "--name", "TSMusicBot Network Probe",
+      "--backend", "pipe",
+      "--disable-discovery",
+    ];
+    if (authMode === "credentials-cache" && primaryCache) {
+      probeArgs.push("--cache", primaryCache.audioDir, "--system-cache", primaryCache.systemDir);
+    } else {
+      probeArgs.push("--access-token", token);
+    }
+    const probe = run(librespot, probeArgs);
     const output = `${probe.stdout ?? ""}\n${probe.stderr ?? ""}`.trim();
     print(probe.error?.code === "ETIMEDOUT" || probe.status === 0, "librespot probe", output.slice(0, 1000));
   }

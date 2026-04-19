@@ -2,7 +2,13 @@ import { describe, it, expect, afterEach } from "vitest";
 import { join } from "node:path";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { getConfiguredMaxVolume, getDefaultConfig, loadConfig, saveConfig } from "./config.js";
+import {
+  getConfiguredMaxVolume,
+  getConfiguredSpotifyLibrespotAuthMode,
+  getDefaultConfig,
+  loadConfig,
+  saveConfig,
+} from "./config.js";
 
 describe("config", () => {
   const dirs: string[] = [];
@@ -59,5 +65,12 @@ describe("config", () => {
     expect(getConfiguredMaxVolume({ maxVolume: 999 })).toBe(100);
     expect(getConfiguredMaxVolume({ maxVolume: 0 })).toBe(1);
     expect(getConfiguredMaxVolume({})).toBe(20);
+  });
+
+  it("defaults librespot auth mode to access-token and accepts credentials-cache", () => {
+    expect(getConfiguredSpotifyLibrespotAuthMode({})).toBe("access-token");
+    expect(getConfiguredSpotifyLibrespotAuthMode({ spotifyLibrespotAuthMode: "credentials-cache" })).toBe("credentials-cache");
+    expect(getConfiguredSpotifyLibrespotAuthMode({ spotifyLibrespotAuthMode: "access-token" })).toBe("access-token");
+    expect(getDefaultConfig().spotifyLibrespotAuthMode).toBe("access-token");
   });
 });
