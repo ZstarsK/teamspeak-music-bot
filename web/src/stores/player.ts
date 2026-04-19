@@ -30,6 +30,12 @@ export interface PlaylistItem {
   coverUrl: string;
   songCount: number;
   platform: string;
+  account?: {
+    id: string;
+    name: string;
+    platform: string;
+    avatarUrl?: string;
+  };
 }
 
 interface TimingState {

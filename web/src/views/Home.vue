@@ -72,26 +72,53 @@
         我的歌单
         <span class="section-count">{{ store.userPlaylists.length }}</span>
       </h2>
-      <div class="playlist-grid">
-        <RouterLink
-          v-for="pl in visibleUserPlaylists"
-          :key="pl.id"
-          :to="`/playlist/${pl.id}?platform=${pl.platform}`"
-          class="playlist-card hover-scale"
+      <div class="account-playlist-groups">
+        <div
+          v-for="group in userPlaylistGroups"
+          :key="group.id"
+          class="account-playlist-group"
         >
-          <CoverArt :url="pl.coverUrl" :size="160" :radius="10" :show-shadow="true" />
-          <div class="playlist-name">{{ pl.name }}</div>
-          <div class="playlist-count">{{ pl.songCount }} 首</div>
-        </RouterLink>
+          <div class="account-playlist-header">
+            <img
+              v-if="group.avatarUrl"
+              :src="group.avatarUrl"
+              class="account-avatar"
+              alt=""
+            />
+            <div v-else class="account-avatar-placeholder">
+              {{ platformLabel(group.platform).slice(0, 1) }}
+            </div>
+            <div class="account-heading">
+              <div class="account-title">{{ group.title }}</div>
+              <div class="account-subtitle">
+                {{ platformLabel(group.platform) }} · {{ group.total }} 个歌单
+              </div>
+            </div>
+          </div>
+
+          <div class="playlist-grid">
+            <RouterLink
+              v-for="pl in group.visiblePlaylists"
+              :key="`${group.id}-${pl.id}`"
+              :to="playlistRoute(pl)"
+              class="playlist-card hover-scale"
+            >
+              <CoverArt :url="pl.coverUrl" :size="160" :radius="10" :show-shadow="true" />
+              <div class="playlist-name">{{ pl.name }}</div>
+              <div class="playlist-count">{{ pl.songCount }} 首</div>
+            </RouterLink>
+          </div>
+
+          <button
+            v-if="group.total > USER_PLAYLIST_LIMIT"
+            class="expand-btn"
+            @click="togglePlaylistGroup(group.id)"
+          >
+            <Icon :icon="expandedPlaylistGroups[group.id] ? 'mdi:chevron-up' : 'mdi:chevron-down'" />
+            {{ expandedPlaylistGroups[group.id] ? '收起' : `展开该账号全部 ${group.total} 个歌单` }}
+          </button>
+        </div>
       </div>
-      <button
-        v-if="store.userPlaylists.length > USER_PLAYLIST_LIMIT"
-        class="expand-btn"
-        @click="userPlaylistsExpanded = !userPlaylistsExpanded"
-      >
-        <Icon :icon="userPlaylistsExpanded ? 'mdi:chevron-up' : 'mdi:chevron-down'" />
-        {{ userPlaylistsExpanded ? '收起' : `展开全部 ${store.userPlaylists.length} 个歌单` }}
-      </button>
     </section>
 
     <!-- B站热门 -->
@@ -120,17 +147,68 @@
 import { ref, computed, onMounted } from 'vue';
 import { Icon } from '@iconify/vue';
 import axios from 'axios';
-import { usePlayerStore, type Song } from '../stores/player.js';
+import { usePlayerStore, type PlaylistItem, type Song } from '../stores/player.js';
 import CoverArt from '../components/CoverArt.vue';
 
 const store = usePlayerStore();
 const USER_PLAYLIST_LIMIT = 20;
-const userPlaylistsExpanded = ref(false);
-const visibleUserPlaylists = computed(() =>
-  userPlaylistsExpanded.value
-    ? store.userPlaylists
-    : store.userPlaylists.slice(0, USER_PLAYLIST_LIMIT)
-);
+const expandedPlaylistGroups = ref<Record<string, boolean>>({});
+
+interface UserPlaylistGroup {
+  id: string;
+  title: string;
+  platform: string;
+  avatarUrl?: string;
+  playlists: PlaylistItem[];
+  visiblePlaylists: PlaylistItem[];
+  total: number;
+}
+
+function platformLabel(platform: string) {
+  if (platform === 'qq') return 'QQ音乐';
+  if (platform === 'bilibili') return 'B站';
+  if (platform === 'youtube') return 'YouTube';
+  return '网易云';
+}
+
+const userPlaylistGroups = computed<UserPlaylistGroup[]>(() => {
+  const groups = new Map<string, Omit<UserPlaylistGroup, 'visiblePlaylists' | 'total'>>();
+
+  for (const playlist of store.userPlaylists) {
+    const id = playlist.account?.id ?? playlist.platform;
+    if (!groups.has(id)) {
+      groups.set(id, {
+        id,
+        title: playlist.account?.name ?? platformLabel(playlist.platform),
+        platform: playlist.account?.platform ?? playlist.platform,
+        avatarUrl: playlist.account?.avatarUrl,
+        playlists: [],
+      });
+    }
+    groups.get(id)!.playlists.push(playlist);
+  }
+
+  return Array.from(groups.values()).map((group) => {
+    const expanded = expandedPlaylistGroups.value[group.id] === true;
+    return {
+      ...group,
+      visiblePlaylists: expanded
+        ? group.playlists
+        : group.playlists.slice(0, USER_PLAYLIST_LIMIT),
+      total: group.playlists.length,
+    };
+  });
+});
+
+function togglePlaylistGroup(groupId: string) {
+  expandedPlaylistGroups.value[groupId] = !expandedPlaylistGroups.value[groupId];
+}
+
+function playlistRoute(playlist: PlaylistItem) {
+  const query: Record<string, string> = { platform: playlist.platform };
+  if (playlist.account?.id) query.accountId = playlist.account.id;
+  return { path: `/playlist/${playlist.id}`, query };
+}
 
 async function playFm() {
   try {
@@ -193,6 +271,57 @@ onMounted(() => {
 .section-count {
   font-size: 13px;
   font-weight: 500;
+  color: var(--text-tertiary);
+}
+
+.account-playlist-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+
+.account-playlist-group {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.account-playlist-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.account-avatar,
+.account-avatar-placeholder {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  flex-shrink: 0;
+}
+
+.account-avatar {
+  object-fit: cover;
+}
+
+.account-avatar-placeholder {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.account-title {
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.account-subtitle {
+  margin-top: 2px;
+  font-size: 12px;
   color: var(--text-tertiary);
 }
 

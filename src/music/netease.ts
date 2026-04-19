@@ -3,6 +3,7 @@ import type {
   MusicProvider,
   Song,
   Playlist,
+  PlaylistDetail,
   LyricLine,
   SearchResult,
   QrCodeResult,
@@ -150,6 +151,23 @@ export class NeteaseProvider implements MusicProvider {
       album: s.al?.name ?? "",
       duration: Math.round((s.dt ?? 0) / 1000),
       coverUrl: s.al?.picUrl ?? "",
+      platform: "netease",
+    };
+  }
+
+  async getPlaylistDetail(playlistId: string): Promise<PlaylistDetail | null> {
+    const res = await this.api.get("/playlist/detail", {
+      params: { id: playlistId, ...this.cookieParams },
+    });
+    const p = res.data?.playlist;
+    if (!p) return null;
+
+    return {
+      id: String(p.id),
+      name: p.name ?? "",
+      description: p.description ?? "",
+      coverUrl: p.coverImgUrl ?? "",
+      songCount: p.trackCount ?? 0,
       platform: "netease",
     };
   }
@@ -324,8 +342,16 @@ export class NeteaseProvider implements MusicProvider {
     const statusRes = await this.api.get("/login/status", {
       params: { ...this.cookieParams },
     });
-    const uid = statusRes.data?.data?.profile?.userId;
+    const profile = statusRes.data?.data?.profile;
+    const uid = profile?.userId;
     if (!uid) return [];
+
+    const account = {
+      id: `netease:${uid}`,
+      name: profile?.nickname ? `网易云: ${profile.nickname}` : `网易云: ${uid}`,
+      platform: "netease" as const,
+      avatarUrl: profile?.avatarUrl,
+    };
 
     const res = await this.api.get("/user/playlist", {
       params: { uid, ...this.cookieParams },
@@ -336,6 +362,7 @@ export class NeteaseProvider implements MusicProvider {
       coverUrl: p.coverImgUrl ?? "",
       songCount: p.trackCount ?? 0,
       platform: "netease",
+      account,
     }));
   }
 }

@@ -1,3 +1,12 @@
+export type MusicPlatform = "netease" | "qq" | "bilibili" | "youtube";
+
+export interface MusicAccount {
+  id: string;
+  name: string;
+  platform: MusicPlatform;
+  avatarUrl?: string;
+}
+
 export interface Song {
   id: string;
   name: string;
@@ -5,7 +14,7 @@ export interface Song {
   album: string;
   duration: number; // seconds
   coverUrl: string;
-  platform: "netease" | "qq" | "bilibili" | "youtube";
+  platform: MusicPlatform;
 }
 
 export interface SongWithUrl extends Song {
@@ -17,7 +26,12 @@ export interface Playlist {
   name: string;
   coverUrl: string;
   songCount: number;
-  platform: "netease" | "qq" | "bilibili" | "youtube";
+  platform: MusicPlatform;
+  account?: MusicAccount;
+}
+
+export interface PlaylistDetail extends Playlist {
+  description: string;
 }
 
 export interface Album {
@@ -26,7 +40,7 @@ export interface Album {
   artist: string;
   coverUrl: string;
   songCount: number;
-  platform: "netease" | "qq" | "bilibili" | "youtube";
+  platform: MusicPlatform;
 }
 
 export interface LyricLine {
@@ -54,13 +68,14 @@ export interface AuthStatus {
 }
 
 export interface MusicProvider {
-  readonly platform: "netease" | "qq" | "bilibili" | "youtube";
+  readonly platform: MusicPlatform;
 
   search(query: string, limit?: number): Promise<SearchResult>;
   getSongUrl(songId: string, quality?: string): Promise<string | null>;
   setQuality(quality: string): void;
   getQuality(): string;
   getSongDetail(songId: string): Promise<Song | null>;
+  getPlaylistDetail?(playlistId: string): Promise<PlaylistDetail | null>;
   getPlaylistSongs(playlistId: string): Promise<Song[]>;
   getRecommendPlaylists(): Promise<Playlist[]>;
   getAlbumSongs(albumId: string): Promise<Song[]>;

@@ -3,6 +3,7 @@ import type {
   MusicProvider,
   Song,
   Playlist,
+  PlaylistDetail,
   LyricLine,
   SearchResult,
   QrCodeResult,
@@ -104,6 +105,31 @@ export class QQMusicProvider implements MusicProvider {
       album: "",
       duration: 0,
       coverUrl: "",
+      platform: "qq",
+    };
+  }
+
+  async getPlaylistDetail(playlistId: string): Promise<PlaylistDetail | null> {
+    const res = await this.api.get("/getSongListDetail", {
+      params: { disstid: playlistId, ...this.cookieParams },
+    });
+    const cdlist = res.data?.response?.cdlist ?? [];
+    const p = cdlist[0];
+    if (!p) return null;
+
+    return {
+      id: String(p.dissid ?? p.disstid ?? playlistId),
+      name: p.dissname ?? p.title ?? "",
+      description: p.desc ?? p.dissdesc ?? p.description ?? "",
+      coverUrl: p.logo ?? p.picurl ?? p.cover_url ?? "",
+      songCount:
+        Number(
+          p.total_song_num ??
+            p.songnum ??
+            p.song_count ??
+            p.songlist?.length ??
+            0
+        ) || 0,
       platform: "qq",
     };
   }
@@ -262,6 +288,13 @@ export class QQMusicProvider implements MusicProvider {
     const uin = uinMatch ? uinMatch[1] : "";
     if (!uin) return [];
 
+    const account = {
+      id: `qq:${uin}`,
+      name: `QQ音乐: QQ ${uin}`,
+      platform: "qq" as const,
+      avatarUrl: `https://q.qlogo.cn/headimg_dl?dst_uin=${uin}&spec=100`,
+    };
+
     const res = await this.api.get("/user/getUserPlaylists", {
       params: { uin, ...this.cookieParams },
     });
@@ -278,6 +311,7 @@ export class QQMusicProvider implements MusicProvider {
           coverUrl: p.picurl ?? p.cover_url ?? "",
           songCount,
           platform: "qq",
+          account,
         } satisfies Playlist;
       });
   }
