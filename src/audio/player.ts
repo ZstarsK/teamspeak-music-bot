@@ -295,19 +295,20 @@ export class AudioPlayer extends EventEmitter {
     });
 
     let gotFirstData = false;
-    const noDataTimer = setTimeout(() => {
-      if (this.sessionId !== playSessionId || gotFirstData || this.state !== "playing") return;
-      const err = new Error(`No PCM data received from ${options.source}`);
-      this.logger.warn({ source: options.source, input: options.display }, "No PCM data received after playback start");
-      this.spawnFailed = true;
-      this.consecutiveFailures++;
-      this.ffmpeg?.kill("SIGTERM");
-      this.emit("error", err);
-    }, 20_000);
+    const noDataTimer = options.source === "pcm-stream" || options.source === "pcm-pipe"
+      ? setTimeout(() => {
+        if (this.sessionId !== playSessionId || gotFirstData || this.state !== "playing") return;
+        const err = new Error(`No PCM data received from ${options.source}`);
+        this.logger.warn({ source: options.source, input: options.display }, "No PCM data received after playback start");
+        this.spawnFailed = true;
+        this.ffmpeg?.kill("SIGTERM");
+        this.emit("error", err);
+      }, 20_000)
+      : null;
     this.ffmpeg.stdout!.on("data", (chunk: Buffer) => {
       if (!gotFirstData) {
         gotFirstData = true;
-        clearTimeout(noDataTimer);
+        if (noDataTimer) clearTimeout(noDataTimer);
         this.logger.info({ bytes: chunk.length }, "FFmpeg: first PCM data received");
       }
       this.pcmBuffer = Buffer.concat([this.pcmBuffer, chunk]);
@@ -319,7 +320,7 @@ export class AudioPlayer extends EventEmitter {
     });
 
     this.ffmpeg.on("close", (code, signal) => {
-      clearTimeout(noDataTimer);
+      if (noDataTimer) clearTimeout(noDataTimer);
       this.logger.info({ exitCode: code, signal, gotData: gotFirstData, framesPlayed: this.framesPlayed }, "FFmpeg process closed");
       if (this.sessionId === playSessionId) {
         this.ffmpeg = null; // Signal frame loop that no more data is coming
