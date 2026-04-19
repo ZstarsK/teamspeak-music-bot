@@ -60,7 +60,7 @@ export function createWebServer(options: WebServerOptions): WebServer {
   );
   app.use("/api/player", createPlayerRouter(
     options.botManager, logger, options.database,
-    options.neteaseProvider, options.qqProvider, options.bilibiliProvider,
+    options.neteaseProvider, options.qqProvider, options.bilibiliProvider, options.config,
   ));
   app.use(
     "/api/auth",

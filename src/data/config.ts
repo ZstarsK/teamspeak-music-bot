@@ -7,6 +7,9 @@ export interface DuckingSettings {
   recoveryMs: number;
 }
 
+export const DEFAULT_MAX_VOLUME = 20;
+export const MAX_VOLUME_CONFIG_MIN = 1;
+export const MAX_VOLUME_CONFIG_MAX = 100;
 export const DUCKING_VOLUME_PERCENT_MIN = 0;
 export const DUCKING_VOLUME_PERCENT_MAX = 100;
 export const DUCKING_RECOVERY_MS_MIN = 0;
@@ -33,6 +36,7 @@ export interface BotConfig {
   autoReturnDelay: number;
   autoPauseOnEmpty: boolean;
   idleTimeoutMinutes: number;
+  maxVolume: number;
   // Public base URL used when generating share links (e.g. the bot专属链接).
   // Leave empty to use the browser's current origin. Example:
   //   "https://music.example.com" or "http://1.2.3.4:3000"
@@ -57,9 +61,21 @@ export function getDefaultConfig(): BotConfig {
     autoReturnDelay: 300,
     autoPauseOnEmpty: true,
     idleTimeoutMinutes: 0,
+    maxVolume: DEFAULT_MAX_VOLUME,
     publicUrl: "",
     trustProxy: false,
   };
+}
+
+export function getConfiguredMaxVolume(config?: Partial<BotConfig> | null): number {
+  const raw = config?.maxVolume;
+  if (typeof raw !== "number" || !Number.isFinite(raw)) {
+    return DEFAULT_MAX_VOLUME;
+  }
+  return Math.max(
+    MAX_VOLUME_CONFIG_MIN,
+    Math.min(MAX_VOLUME_CONFIG_MAX, Math.round(raw)),
+  );
 }
 
 export function loadConfig(path: string): BotConfig {

@@ -419,7 +419,8 @@ pip install -U yt-dlp
   "adminPassword": "",
   "adminGroups": [],
   "autoReturnDelay": 300,
-  "autoPauseOnEmpty": true
+  "autoPauseOnEmpty": true,
+  "maxVolume": 20
 }
 ```
 
@@ -429,7 +430,7 @@ pip install -U yt-dlp
 A：支持。本项目内置 TS3/TS6 双协议支持，连接时会自动检测服务器类型。如果自动检测失败（例如 Query 端口被防火墙屏蔽），可以在创建机器人时手动指定 `serverProtocol: "ts6"`。TS6 Server 的 HTTP Query API（端口 10080）也已适配，需要时可配置 `ts6ApiKey`。
 
 **Q：机器人连接了但 TeamSpeak 中听不到音乐？**
-A：确保机器人和你在同一个频道。检查音量（`!vol 75`）。部分 VIP 歌曲需要先登录账号。
+A：确保机器人和你在同一个频道。检查音量（`!vol 8`，上限由 `config.json` 里的 `maxVolume` 决定）。部分 VIP 歌曲需要先登录账号。
 
 **Q：提示"无法获取播放链接"？**
 A：在设置页面扫码登录音乐账号。许多歌曲需要登录后才能播放。

@@ -55,12 +55,11 @@
 
       <div class="player-right">
         <Icon icon="mdi:volume-high" class="volume-icon" />
-<!--        音量范围        -->
         <input
           type="range"
           min="0"
-          max="35"
-          :value="activeBot?.volume ?? 18"
+          :max="maxVolume"
+          :value="Math.min(activeBot?.volume ?? maxVolume, maxVolume)"
           @change="onVolumeChange"
           class="volume-slider"
         />
@@ -91,6 +90,7 @@ const store = usePlayerStore();
 const activeBot = computed(() => store.activeBot);
 const currentSong = computed(() => store.currentSong);
 const showBotBadge = computed(() => store.bots.length > 1);
+const maxVolume = computed(() => store.maxVolume);
 
 function toggleLyrics() {
   if (route.path === '/lyrics') {

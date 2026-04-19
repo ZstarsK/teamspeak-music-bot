@@ -20,13 +20,13 @@ import {
   DUCKING_RECOVERY_MS_MIN,
   DUCKING_VOLUME_PERCENT_MAX,
   DUCKING_VOLUME_PERCENT_MIN,
+  getConfiguredMaxVolume,
   getDefaultDuckingSettings,
   type BotConfig,
   type DuckingSettings,
 } from "../data/config.js";
 import { BotProfileManager } from "./profile.js";
 
-const MAX_VOLUME = 20;
 const DUCKING_RELEASE_MS = 450;
 const DUCKING_POLL_INTERVAL_MS = 100;
 const TRACK_END_GRACE_SECONDS = 1.5;
@@ -133,7 +133,9 @@ export class BotInstance extends EventEmitter {
     this.duckingSettings = { ...(options.duckingSettings ?? getDefaultDuckingSettings()) };
 
     this.tsClient = new TS3Client(options.tsOptions, this.logger);
-    this.player = new AudioPlayer(this.logger);
+    this.player = new AudioPlayer(this.logger, {
+      maxVolume: getConfiguredMaxVolume(this.config),
+    });
     this.syncDuckingConfig();
     this.queue = new PlayQueue();
 
@@ -626,8 +628,9 @@ export class BotInstance extends EventEmitter {
   }
 
   private cmdVol(cmd: ParsedCommand): string {
+    const maxVolume = getConfiguredMaxVolume(this.config);
     const vol = parseInt(cmd.args, 10);
-    if (isNaN(vol) || vol < 0 || vol > MAX_VOLUME) return `Usage: !vol <0-${MAX_VOLUME}>`;
+    if (isNaN(vol) || vol < 0 || vol > maxVolume) return `Usage: !vol <0-${maxVolume}>`;
     this.player.setVolume(vol);
     this.emit("stateChange");
     return `Volume set to ${vol}%`;
@@ -840,6 +843,7 @@ export class BotInstance extends EventEmitter {
 
   private cmdHelp(): string {
     const p = this.config.commandPrefix;
+    const maxVolume = getConfiguredMaxVolume(this.config);
     return [
       "TSMusicBot Commands:",
       `${p}play <song>  — Search and play`,
@@ -850,7 +854,7 @@ export class BotInstance extends EventEmitter {
       `${p}pause/resume — Pause/resume`,
       `${p}next/prev    — Next/previous`,
       `${p}stop         — Stop and clear queue`,
-      `${p}vol <0-${MAX_VOLUME}>  — Set volume`,
+      `${p}vol <0-${maxVolume}>  — Set volume`,
       `${p}duck [on|off|percent|release] — Ducking settings`,
       `${p}queue        — Show queue`,
       `${p}mode <seq|loop|random|rloop> — Play mode`,

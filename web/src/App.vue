@@ -25,6 +25,7 @@ onMounted(() => {
   playerStore.loadTheme();
   connect();
   playerStore.fetchBots();
+  playerStore.fetchGlobalSettings();
   // Periodically sync elapsed time from server (ground truth)
   syncTimer = setInterval(() => playerStore.syncElapsed(), 3000);
 });

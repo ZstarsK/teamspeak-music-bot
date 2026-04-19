@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from "vitest";
 import { join } from "node:path";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { getDefaultConfig, loadConfig, saveConfig } from "./config.js";
+import { getConfiguredMaxVolume, getDefaultConfig, loadConfig, saveConfig } from "./config.js";
 
 describe("config", () => {
   const dirs: string[] = [];
@@ -51,5 +51,13 @@ describe("config", () => {
     expect(loaded.commandPrefix).toBe("!");
     expect(loaded.autoPauseOnEmpty).toBe(true);
     expect(loaded.idleTimeoutMinutes).toBe(0);
+    expect(loaded.maxVolume).toBe(20);
+  });
+
+  it("sanitizes configured max volume", () => {
+    expect(getConfiguredMaxVolume({ maxVolume: 35 })).toBe(35);
+    expect(getConfiguredMaxVolume({ maxVolume: 999 })).toBe(100);
+    expect(getConfiguredMaxVolume({ maxVolume: 0 })).toBe(1);
+    expect(getConfiguredMaxVolume({})).toBe(20);
   });
 });

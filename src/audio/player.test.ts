@@ -66,4 +66,10 @@ describe("AudioPlayer ducking", () => {
 
     expect(ducked).toBe(400);
   });
+
+  it("clamps volume using the configured max volume", () => {
+    const player = new AudioPlayer(logger, { maxVolume: 12 });
+    player.setVolume(99);
+    expect(player.getVolume()).toBe(12);
+  });
 });

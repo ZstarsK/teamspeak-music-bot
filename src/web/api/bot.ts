@@ -5,6 +5,7 @@ import {
   DUCKING_RECOVERY_MS_MIN,
   DUCKING_VOLUME_PERCENT_MAX,
   DUCKING_VOLUME_PERCENT_MIN,
+  getConfiguredMaxVolume,
   type BotConfig,
 } from "../../data/config.js";
 import { saveConfig } from "../../data/config.js";
@@ -27,6 +28,7 @@ export function createBotRouter(
   router.get("/settings", (_req, res) => {
     res.json({
       idleTimeoutMinutes: config.idleTimeoutMinutes ?? 0,
+      maxVolume: getConfiguredMaxVolume(config),
     });
   });
 

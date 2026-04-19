@@ -3,7 +3,12 @@ import { EventEmitter } from "node:events";
 import { createRequire } from "node:module";
 import { accessSync, chmodSync, constants } from "node:fs";
 import { createOpusEncoder, PCM_FRAME_BYTES, type Encoder } from "./encoder.js";
-import { getDefaultDuckingSettings, type DuckingSettings } from "../data/config.js";
+import {
+  DEFAULT_MAX_VOLUME,
+  getConfiguredMaxVolume,
+  getDefaultDuckingSettings,
+  type DuckingSettings,
+} from "../data/config.js";
 import type { Logger } from "../logger.js";
 
 // ffmpeg-static is a CJS module that exports the path to the bundled ffmpeg binary.
@@ -82,9 +87,12 @@ export interface PlayerEvents {
 export type PlayerState = "idle" | "playing" | "paused";
 
 const FRAME_DURATION_MS = 20;
-const MAX_VOLUME = 20;
 const DEFAULT_VOLUME = 8;
 const DUCKING_FADE_OUT_MS = 160;
+
+export interface AudioPlayerOptions {
+  maxVolume?: number;
+}
 
 export class AudioPlayer extends EventEmitter {
   private ffmpeg: ChildProcess | null = null;
@@ -109,11 +117,14 @@ export class AudioPlayer extends EventEmitter {
   private duckingFactor = 1;
   private lastFrameAt = 0;
   private duckingConfig: DuckingSettings = getDefaultDuckingSettings();
+  private readonly maxVolume: number;
 
-  constructor(logger: Logger) {
+  constructor(logger: Logger, options: AudioPlayerOptions = {}) {
     super();
     this.encoder = createOpusEncoder();
     this.logger = logger;
+    this.maxVolume = getConfiguredMaxVolume({ maxVolume: options.maxVolume ?? DEFAULT_MAX_VOLUME });
+    this.volume = Math.min(DEFAULT_VOLUME, this.maxVolume);
   }
 
   play(url: string, seekSeconds = 0): void {
@@ -397,7 +408,7 @@ export class AudioPlayer extends EventEmitter {
   }
 
   setVolume(vol: number): void {
-    this.volume = Math.max(0, Math.min(MAX_VOLUME, vol));
+    this.volume = Math.max(0, Math.min(this.maxVolume, vol));
   }
 
   setDuckingActive(active: boolean): void {

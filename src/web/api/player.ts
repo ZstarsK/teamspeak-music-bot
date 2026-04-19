@@ -1,5 +1,6 @@
 import { Router } from "express";
 import type { BotManager } from "../../bot/manager.js";
+import { getConfiguredMaxVolume, type BotConfig } from "../../data/config.js";
 import type { BotDatabase } from "../../data/database.js";
 import type { MusicProvider } from "../../music/provider.js";
 import type { Logger } from "../../logger.js";
@@ -13,9 +14,10 @@ export function createPlayerRouter(
   neteaseProvider?: MusicProvider,
   qqProvider?: MusicProvider,
   bilibiliProvider?: MusicProvider,
+  config?: BotConfig,
 ): Router {
   const router = Router();
-  const MAX_VOLUME = 20;
+  const maxVolume = getConfiguredMaxVolume(config);
 
   router.use("/:botId", (req, res, next) => {
     const bot = botManager.getBot(req.params.botId);
@@ -100,11 +102,11 @@ export function createPlayerRouter(
         typeof volume !== "number" ||
         !Number.isFinite(volume) ||
         volume < 0 ||
-        volume > MAX_VOLUME
+        volume > maxVolume
       ) {
         res
           .status(400)
-          .json({ error: `volume must be a number between 0 and ${MAX_VOLUME}` });
+          .json({ error: `volume must be a number between 0 and ${maxVolume}` });
         return;
       }
       const cmd = parseCommand(`!vol ${Math.round(volume)}`, "!")!;

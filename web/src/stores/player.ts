@@ -60,6 +60,7 @@ export const usePlayerStore = defineStore('player', {
     /** Per-bot timing state keyed by botId */
     timings: {} as Record<string, TimingState>,
     theme: 'dark' as 'dark' | 'light',
+    maxVolume: 20,
 
     // Home page cache
     recommendPlaylists: [] as PlaylistItem[],
@@ -173,6 +174,15 @@ export const usePlayerStore = defineStore('player', {
     loadTheme() {
       const saved = localStorage.getItem('theme') as 'dark' | 'light' | null;
       if (saved) this.theme = saved;
+    },
+
+    async fetchGlobalSettings() {
+      try {
+        const res = await axios.get('/api/bot/settings');
+        this.maxVolume = typeof res.data.maxVolume === 'number' ? res.data.maxVolume : 20;
+      } catch {
+        // ignore
+      }
     },
 
     async startBotInstance(id: string) {
@@ -340,7 +350,8 @@ export const usePlayerStore = defineStore('player', {
 
     async setVolume(volume: number) {
       if (!this.activeBotId) return;
-      await axios.post(`/api/player/${this.activeBotId}/volume`, { volume });
+      const clampedVolume = Math.max(0, Math.min(this.maxVolume, volume));
+      await axios.post(`/api/player/${this.activeBotId}/volume`, { volume: clampedVolume });
     },
 
     async setMode(mode: string) {
