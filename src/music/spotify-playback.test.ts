@@ -31,7 +31,24 @@ describe("spotify librespot helpers", () => {
     expect(args).toContain("/tmp/system-cache");
     expect(args).toContain("--disable-discovery");
     expect(args).toContain("--passthrough");
+    expect(args[args.indexOf("--backend") + 1]).toBe("pipe");
     expect(args).not.toContain("--access-token");
+  });
+
+  it("uses S16 output when passthrough is disabled", () => {
+    const args = buildLibrespotArgs({
+      mode: "credentials-cache",
+      deviceName: "TSMusicBot Spotify",
+      eventScriptPath: "/tmp/spotify-event.cjs",
+      audioCacheDir: "/tmp/audio-cache",
+      systemCacheDir: "/tmp/system-cache",
+      usePassthrough: false,
+    });
+
+    const formatIndex = args.indexOf("--format");
+    expect(formatIndex).toBeGreaterThan(-1);
+    expect(args[args.indexOf("--backend") + 1]).toBe("pipe");
+    expect(args[formatIndex + 1]).toBe("S16");
   });
 
   it("passes access-token when using access-token mode", () => {

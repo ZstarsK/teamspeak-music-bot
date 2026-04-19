@@ -58,6 +58,7 @@ export function buildLibrespotArgs(params: {
   const args = [
     "--name", params.deviceName,
     "--backend", "pipe",
+    ...(params.usePassthrough ? ["--passthrough"] : ["--format", "S16"]),
     "--cache", params.audioCacheDir,
     "--system-cache", params.systemCacheDir,
     "--bitrate", "320",
@@ -67,11 +68,6 @@ export function buildLibrespotArgs(params: {
     "--initial-volume", "100",
     "--disable-discovery",
   ];
-  if (params.usePassthrough) {
-    args.splice(3, 0, "--passthrough");
-  } else {
-    args.splice(3, 0, "--format", "S16");
-  }
 
   if (params.mode === "credentials-cache") {
     return args;
