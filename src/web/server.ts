@@ -1,4 +1,5 @@
 import express from "express";
+import axios from "axios";
 import http from "node:http";
 import path from "node:path";
 import { WebSocketServer } from "ws";
@@ -73,6 +74,50 @@ export function createWebServer(options: WebServerOptions): WebServer {
 
   app.get("/api/health", (_req, res) => {
     res.json({ status: "ok", version: "0.1.0" });
+  });
+
+  app.get("/api/proxy/image", async (req, res) => {
+    try {
+      const rawUrl = typeof req.query.url === "string" ? req.query.url : "";
+      if (!rawUrl) {
+        res.status(400).json({ error: "url is required" });
+        return;
+      }
+      const target = new URL(rawUrl);
+      const host = target.hostname.toLowerCase();
+      const allowed =
+        host === "hdslb.com" ||
+        host.endsWith(".hdslb.com") ||
+        host === "bilibili.com" ||
+        host.endsWith(".bilibili.com");
+      if (!["http:", "https:"].includes(target.protocol) || !allowed) {
+        res.status(400).json({ error: "image host is not allowed" });
+        return;
+      }
+
+      const upstream = await axios.get(target.toString(), {
+        responseType: "stream",
+        timeout: 10_000,
+        headers: {
+          Referer: "https://www.bilibili.com/",
+          "User-Agent":
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        },
+        validateStatus: (status) => status >= 200 && status < 400,
+      });
+
+      res.setHeader("Cache-Control", "public, max-age=86400");
+      const contentType = upstream.headers["content-type"];
+      if (contentType) res.setHeader("Content-Type", contentType);
+      const contentLength = upstream.headers["content-length"];
+      if (contentLength) res.setHeader("Content-Length", contentLength);
+      upstream.data.pipe(res);
+    } catch (err) {
+      logger.warn({ err }, "Image proxy request failed");
+      if (!res.headersSent) {
+        res.status(502).json({ error: "image proxy failed" });
+      }
+    }
   });
 
   if (options.staticDir) {

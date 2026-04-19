@@ -198,6 +198,41 @@ export class AudioPlayer extends EventEmitter {
     });
   }
 
+  playPcmStream(
+    input: NodeJS.ReadableStream,
+    options: {
+      inputSampleRate?: number;
+      seekSeconds?: number;
+      cleanup?: () => void | Promise<void>;
+    } = {},
+  ): void {
+    const seekSeconds = options.seekSeconds ?? 0;
+    const args: string[] = [];
+    if (seekSeconds > 0) {
+      args.push("-ss", String(seekSeconds));
+    }
+    args.push(
+      "-f", "s16le",
+      "-ar", String(options.inputSampleRate ?? 44100),
+      "-ac", "2",
+      "-i", "pipe:0",
+      "-f", "s16le",
+      "-ar", "48000",
+      "-ac", "2",
+      "-acodec", "pcm_s16le",
+      "-",
+    );
+
+    this.playWithFfmpegArgs(args, {
+      source: "pcm-stream",
+      display: "stdin",
+      currentUrl: "pipe:stdin",
+      seekSeconds,
+      cleanup: options.cleanup,
+      stdin: input,
+    });
+  }
+
   private playWithFfmpegArgs(
     args: string[],
     options: {
@@ -206,6 +241,7 @@ export class AudioPlayer extends EventEmitter {
       currentUrl: string;
       seekSeconds: number;
       cleanup?: () => void | Promise<void>;
+      stdin?: NodeJS.ReadableStream;
     },
   ): void {
     this.stop();
@@ -237,9 +273,20 @@ export class AudioPlayer extends EventEmitter {
 
     const ffmpegBin = getFfmpegCommand();
     this.logger.info({ ffmpeg: ffmpegBin }, "Using ffmpeg binary");
-    this.ffmpeg = spawn(ffmpegBin, args, { stdio: ["ignore", "pipe", "pipe"] });
+    this.ffmpeg = spawn(ffmpegBin, args, { stdio: [options.stdin ? "pipe" : "ignore", "pipe", "pipe"] });
 
     // Prevent stream errors from crashing the process
+    if (options.stdin && this.ffmpeg.stdin) {
+      const ffmpegStdin = this.ffmpeg.stdin;
+      (options.stdin as any).unpipe?.();
+      options.stdin.on("error", (err) => {
+        this.logger.warn({ err }, "PCM input stream error");
+      });
+      ffmpegStdin.on("error", (err) => {
+        this.logger.warn({ err }, "FFmpeg stdin error");
+      });
+      options.stdin.pipe(ffmpegStdin);
+    }
     this.ffmpeg.stdout!.on("error", (err) => {
       this.logger.warn({ err }, "FFmpeg stdout error");
     });
@@ -248,9 +295,19 @@ export class AudioPlayer extends EventEmitter {
     });
 
     let gotFirstData = false;
+    const noDataTimer = setTimeout(() => {
+      if (this.sessionId !== playSessionId || gotFirstData || this.state !== "playing") return;
+      const err = new Error(`No PCM data received from ${options.source}`);
+      this.logger.warn({ source: options.source, input: options.display }, "No PCM data received after playback start");
+      this.spawnFailed = true;
+      this.consecutiveFailures++;
+      this.ffmpeg?.kill("SIGTERM");
+      this.emit("error", err);
+    }, 20_000);
     this.ffmpeg.stdout!.on("data", (chunk: Buffer) => {
       if (!gotFirstData) {
         gotFirstData = true;
+        clearTimeout(noDataTimer);
         this.logger.info({ bytes: chunk.length }, "FFmpeg: first PCM data received");
       }
       this.pcmBuffer = Buffer.concat([this.pcmBuffer, chunk]);
@@ -262,6 +319,7 @@ export class AudioPlayer extends EventEmitter {
     });
 
     this.ffmpeg.on("close", (code, signal) => {
+      clearTimeout(noDataTimer);
       this.logger.info({ exitCode: code, signal, gotData: gotFirstData, framesPlayed: this.framesPlayed }, "FFmpeg process closed");
       if (this.sessionId === playSessionId) {
         this.ffmpeg = null; // Signal frame loop that no more data is coming

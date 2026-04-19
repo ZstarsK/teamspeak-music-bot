@@ -1,8 +1,8 @@
 <template>
   <div class="cover-art" :style="{ width: size + 'px', height: size + 'px', borderRadius: radius + 'px' }">
     <img
-      v-if="url && !errored"
-      :src="url"
+      v-if="proxiedUrl && !errored"
+      :src="proxiedUrl"
       alt=""
       class="cover-img"
       :style="{ borderRadius: radius + 'px' }"
@@ -15,10 +15,10 @@
       <svg viewBox="0 0 24 24" class="placeholder-icon"><path fill="currentColor" d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/></svg>
     </div>
     <div
-      v-if="showShadow && url && !errored"
+      v-if="showShadow && proxiedUrl && !errored"
       class="cover-shadow"
       :style="{
-        backgroundImage: `url(${url})`,
+        backgroundImage: `url(${proxiedUrl})`,
         borderRadius: radius + 'px',
       }"
     />
@@ -26,7 +26,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from 'vue';
+import { computed, ref, watch } from 'vue';
+import { withBasePath } from '../lib/base.js';
 
 const props = withDefaults(defineProps<{
   url: string;
@@ -41,6 +42,25 @@ const props = withDefaults(defineProps<{
 
 const loaded = ref(false);
 const errored = ref(false);
+const proxiedUrl = computed(() => {
+  const url = props.url;
+  if (!url) return '';
+  try {
+    const parsed = new URL(url, window.location.href);
+    const host = parsed.hostname.toLowerCase();
+    if (
+      host === 'hdslb.com' ||
+      host.endsWith('.hdslb.com') ||
+      host === 'bilibili.com' ||
+      host.endsWith('.bilibili.com')
+    ) {
+      return withBasePath(`/api/proxy/image?url=${encodeURIComponent(url)}`);
+    }
+  } catch {
+    return url;
+  }
+  return url;
+});
 
 // Reset error state when URL changes
 watch(() => props.url, () => {

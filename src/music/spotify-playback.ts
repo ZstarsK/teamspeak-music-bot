@@ -1,4 +1,4 @@
-import { spawn, execFileSync, type ChildProcess } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import type { AudioPlayer } from "../audio/player.js";
@@ -28,7 +28,6 @@ export class SpotifyPlaybackEngine {
   private activeTrackUri: string | null = null;
   private lastEndAt = 0;
   private readonly runtimeDir: string;
-  private readonly fifoPath: string;
   private readonly eventFilePath: string;
   private readonly eventScriptPath: string;
   private readonly cacheDir: string;
@@ -44,7 +43,6 @@ export class SpotifyPlaybackEngine {
   ) {
     const safeBotId = sanitizeName(botId);
     this.runtimeDir = path.join(cacheBaseDir, safeBotId);
-    this.fifoPath = path.join(this.runtimeDir, "spotify.pcm");
     this.eventFilePath = path.join(this.runtimeDir, "events.jsonl");
     this.eventScriptPath = path.join(this.runtimeDir, "spotify-event.cjs");
     this.cacheDir = path.join(this.runtimeDir, "cache");
@@ -56,7 +54,11 @@ export class SpotifyPlaybackEngine {
     const account = await this.provider.getPlaybackAccount(song.accountId);
     const trackUri = this.provider.getTrackUri(song.id);
     await this.ensureProcess(account.id, account.accessToken, onEnd);
-    player.playPcmPipe(this.fifoPath, {
+    const pcmStream = this.librespot?.stdout;
+    if (!pcmStream) {
+      throw new Error("librespot PCM stdout is not available");
+    }
+    player.playPcmStream(pcmStream, {
       inputSampleRate: 44100,
       cleanup: () => {
         this.pause().catch((err) => {
@@ -130,14 +132,6 @@ export class SpotifyPlaybackEngine {
       fs.writeFileSync(this.eventFilePath, "", { encoding: "utf-8", mode: 0o600 });
     }
     this.eventOffset = 0;
-
-    try {
-      if (fs.existsSync(this.fifoPath)) fs.unlinkSync(this.fifoPath);
-      execFileSync("mkfifo", [this.fifoPath]);
-      fs.chmodSync(this.fifoPath, 0o600);
-    } catch (err) {
-      throw new Error(`Failed to create Spotify PCM FIFO at ${this.fifoPath}: ${(err as Error).message}`);
-    }
   }
 
   private async ensureProcess(
@@ -155,7 +149,7 @@ export class SpotifyPlaybackEngine {
     const args = [
       "--name", this.deviceName,
       "--backend", "pipe",
-      "--device", this.fifoPath,
+      "--format", "S16",
       "--cache", this.cacheDir,
       "--bitrate", "320",
       "--access-token", accessToken,
@@ -169,7 +163,7 @@ export class SpotifyPlaybackEngine {
     const bin = this.config.spotifyLibrespotPath || "librespot";
     this.logger.info({ bin, deviceName: this.deviceName }, "Starting librespot sidecar");
     this.librespot = spawn(bin, args, {
-      stdio: ["ignore", "ignore", "pipe"],
+      stdio: ["ignore", "pipe", "pipe"],
       env: {
         ...process.env,
         SPOTIFY_EVENT_FILE: this.eventFilePath,
