@@ -215,14 +215,27 @@ export class SpotifyPlaybackEngine {
     const account = await this.provider.getPlaybackAccount(song.accountId);
     const trackUri = this.provider.getTrackUri(song.id);
     const playerState = player.getState();
-    const sameProcess = Boolean(this.librespot && !this.librespot.killed && this.activeAccountId === account.id);
+    let sameProcess = Boolean(this.librespot && !this.librespot.killed && this.activeAccountId === account.id);
     await this.ensureProcess(account, onEnd);
-    const deviceId = await this.waitForDeviceWithPassthroughFallback(account, onEnd);
-    const reusingStream = shouldReuseSpotifyStreamForTrackSwitch({
+    let deviceId = await this.waitForDeviceWithPassthroughFallback(account, onEnd);
+    let reusingStream = shouldReuseSpotifyStreamForTrackSwitch({
       sameProcess,
       playerState,
       outputMode: this.currentOutputMode,
     }) && this.streamAttached && this.attachedPlayer === player;
+
+    if (!reusingStream && sameProcess && this.currentOutputMode === "encoded") {
+      this.logger.info(
+        { deviceId: this.activeDeviceId, trackUri: this.activeTrackUri, playerState },
+        "Restarting Spotify passthrough sidecar before attaching a fresh FFmpeg reader",
+      );
+      this.shutdown();
+      await this.ensureProcess(account, onEnd);
+      deviceId = await this.waitForDeviceWithPassthroughFallback(account, onEnd);
+      sameProcess = false;
+      reusingStream = false;
+    }
+
     const pcmReusingStream = reusingStream && this.currentOutputMode === "pcm";
     if (!reusingStream) {
       this.attachPlayerToStream(player);
