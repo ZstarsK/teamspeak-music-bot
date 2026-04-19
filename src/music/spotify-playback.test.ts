@@ -24,6 +24,7 @@ describe("spotify librespot helpers", () => {
       eventScriptPath: "/tmp/spotify-event.cjs",
       audioCacheDir: "/tmp/audio-cache",
       systemCacheDir: "/tmp/system-cache",
+      usePassthrough: true,
     });
 
     expect(args).toContain("--system-cache");
@@ -40,6 +41,7 @@ describe("spotify librespot helpers", () => {
       eventScriptPath: "/tmp/spotify-event.cjs",
       audioCacheDir: "/tmp/audio-cache",
       systemCacheDir: "/tmp/system-cache",
+      usePassthrough: true,
       accessToken: "abc123",
     });
 
@@ -49,9 +51,10 @@ describe("spotify librespot helpers", () => {
   });
 
   it("reuses the spotify sidecar when the local player is still attached", () => {
-    expect(shouldReuseSpotifyStreamForTrackSwitch({ sameProcess: true, playerState: "playing" })).toBe(true);
-    expect(shouldReuseSpotifyStreamForTrackSwitch({ sameProcess: true, playerState: "paused" })).toBe(true);
-    expect(shouldReuseSpotifyStreamForTrackSwitch({ sameProcess: true, playerState: "idle" })).toBe(false);
-    expect(shouldReuseSpotifyStreamForTrackSwitch({ sameProcess: false, playerState: "playing" })).toBe(false);
+    expect(shouldReuseSpotifyStreamForTrackSwitch({ sameProcess: true, playerState: "playing", outputMode: "encoded" })).toBe(true);
+    expect(shouldReuseSpotifyStreamForTrackSwitch({ sameProcess: true, playerState: "paused", outputMode: "encoded" })).toBe(true);
+    expect(shouldReuseSpotifyStreamForTrackSwitch({ sameProcess: true, playerState: "idle", outputMode: "encoded" })).toBe(false);
+    expect(shouldReuseSpotifyStreamForTrackSwitch({ sameProcess: true, playerState: "playing", outputMode: "pcm" })).toBe(false);
+    expect(shouldReuseSpotifyStreamForTrackSwitch({ sameProcess: false, playerState: "playing", outputMode: "encoded" })).toBe(false);
   });
 });

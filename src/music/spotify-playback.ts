@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import type { AudioPlayer } from "../audio/player.js";
@@ -14,6 +14,8 @@ import { SpotifyProvider, type SpotifyAccountRecord } from "./spotify.js";
 const DEVICE_WAIT_TIMEOUT_MS = 12_000;
 const DEVICE_WAIT_INTERVAL_MS = 250;
 const EVENT_POLL_INTERVAL_MS = 350;
+const PCM_SWITCH_QUIET_WINDOW_MS = 120;
+const PCM_SWITCH_TIMEOUT_MS = 1_500;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -50,12 +52,12 @@ export function buildLibrespotArgs(params: {
   eventScriptPath: string;
   audioCacheDir: string;
   systemCacheDir: string;
+  usePassthrough?: boolean;
   accessToken?: string;
 }): string[] {
   const args = [
     "--name", params.deviceName,
     "--backend", "pipe",
-    "--passthrough",
     "--cache", params.audioCacheDir,
     "--system-cache", params.systemCacheDir,
     "--bitrate", "320",
@@ -65,6 +67,11 @@ export function buildLibrespotArgs(params: {
     "--initial-volume", "100",
     "--disable-discovery",
   ];
+  if (params.usePassthrough) {
+    args.splice(3, 0, "--passthrough");
+  } else {
+    args.splice(3, 0, "--format", "S16");
+  }
 
   if (params.mode === "credentials-cache") {
     return args;
@@ -78,8 +85,9 @@ export function buildLibrespotArgs(params: {
 export function shouldReuseSpotifyStreamForTrackSwitch(params: {
   sameProcess: boolean;
   playerState: "idle" | "playing" | "paused";
+  outputMode: "pcm" | "encoded";
 }): boolean {
-  return params.sameProcess && params.playerState !== "idle";
+  return params.outputMode === "encoded" && params.sameProcess && params.playerState !== "idle";
 }
 
 function directoryHasFiles(dir: string): boolean {
@@ -88,6 +96,27 @@ function directoryHasFiles(dir: string): boolean {
   } catch {
     return false;
   }
+}
+
+const librespotPassthroughSupportCache = new Map<string, boolean>();
+
+function detectLibrespotPassthroughSupport(bin: string): boolean {
+  const cached = librespotPassthroughSupportCache.get(bin);
+  if (cached !== undefined) return cached;
+  let supported = false;
+  try {
+    const result = spawnSync(bin, ["--help"], {
+      encoding: "utf-8",
+      timeout: 5000,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`.toLowerCase();
+    supported = output.includes("passthrough");
+  } catch {
+    supported = false;
+  }
+  librespotPassthroughSupportCache.set(bin, supported);
+  return supported;
 }
 
 export class SpotifyPlaybackEngine {
@@ -112,6 +141,8 @@ export class SpotifyPlaybackEngine {
   private attachedPlayer: AudioPlayer | null = null;
   private streamAttached = false;
   private activeTrackId: string | null = null;
+  private currentOutputMode: "pcm" | "encoded" = "pcm";
+  private transitionInFlight = false;
 
   constructor(
     private provider: SpotifyProvider,
@@ -140,9 +171,12 @@ export class SpotifyPlaybackEngine {
     const reusingStream = shouldReuseSpotifyStreamForTrackSwitch({
       sameProcess,
       playerState,
+      outputMode: this.currentOutputMode,
     }) && this.streamAttached && this.attachedPlayer === player;
     if (!reusingStream) {
       this.attachPlayerToStream(player);
+    } else if (this.currentOutputMode === "pcm") {
+      await this.preparePcmBoundary(player, 0);
     } else {
       this.logger.info(
         { deviceId: this.activeDeviceId, trackUri: this.activeTrackUri, playerState },
@@ -158,16 +192,21 @@ export class SpotifyPlaybackEngine {
     this.activeTrackUri = trackUri;
     this.activeTrackId = song.id;
     try {
-      await this.provider.startPlayback({
-        accountId: account.id,
-        deviceId,
-        trackUri,
+      await this.withTransition(async () => {
+        await this.provider.startPlayback({
+          accountId: account.id,
+          deviceId,
+          trackUri,
+        });
       });
       this.playbackStarted = true;
     } catch (err) {
       this.playbackStarted = false;
       player.stop();
       throw err;
+    }
+    if (reusingStream && this.currentOutputMode === "pcm") {
+      player.resume();
     }
     this.logger.info({ trackUri, deviceId }, "Spotify playback started");
   }
@@ -184,7 +223,24 @@ export class SpotifyPlaybackEngine {
 
   async seek(seconds: number): Promise<void> {
     if (!this.activeAccountId) return;
-    await this.provider.seekPlayback(Math.max(0, seconds * 1000), this.activeAccountId, this.activeDeviceId);
+    const player = this.attachedPlayer;
+    const targetSeconds = Math.max(0, seconds);
+    if (!player) {
+      await this.provider.seekPlayback(targetSeconds * 1000, this.activeAccountId, this.activeDeviceId);
+      return;
+    }
+    if (this.currentOutputMode === "pcm") {
+      await this.preparePcmBoundary(player, targetSeconds);
+      await this.withTransition(async () => {
+        await this.provider.seekPlayback(targetSeconds * 1000, this.activeAccountId!, this.activeDeviceId);
+      });
+      player.resume();
+      return;
+    }
+    await this.withTransition(async () => {
+      await this.provider.seekPlayback(targetSeconds * 1000, this.activeAccountId!, this.activeDeviceId);
+    });
+    player.markSeek(targetSeconds);
   }
 
   shutdown(): void {
@@ -203,6 +259,8 @@ export class SpotifyPlaybackEngine {
     this.playbackStarted = false;
     this.attachedPlayer = null;
     this.streamAttached = false;
+    this.currentOutputMode = "pcm";
+    this.transitionInFlight = false;
   }
 
   private ensureRuntimeFiles(): void {
@@ -269,21 +327,29 @@ export class SpotifyPlaybackEngine {
       }
     }
 
+    const bin = this.config.spotifyLibrespotPath || "librespot";
+    const usePassthrough = detectLibrespotPassthroughSupport(bin);
+    this.currentOutputMode = usePassthrough ? "encoded" : "pcm";
+    if (!usePassthrough) {
+      this.logger.warn({ bin }, "librespot passthrough is unavailable, falling back to PCM pipe output");
+    }
+
     const args = buildLibrespotArgs({
       mode,
       deviceName: this.currentDeviceName,
       eventScriptPath: this.eventScriptPath,
       audioCacheDir: cachePaths.audioDir,
       systemCacheDir: cachePaths.systemDir,
+      usePassthrough,
       ...(mode === "access-token" ? { accessToken: account.accessToken } : {}),
     });
 
-    const bin = this.config.spotifyLibrespotPath || "librespot";
     this.logger.info(
       {
         bin,
         deviceName: this.currentDeviceName,
         authMode: mode,
+        outputMode: this.currentOutputMode,
         cacheDir: cachePaths.audioDir,
         systemCacheDir: cachePaths.systemDir,
       },
@@ -349,12 +415,20 @@ export class SpotifyPlaybackEngine {
           if (!line.trim()) continue;
           const event = JSON.parse(line) as { PLAYER_EVENT?: string; TRACK_ID?: string; URI?: string };
           if (event.PLAYER_EVENT === "end_of_track") {
+            if (this.transitionInFlight) {
+              this.logger.debug({ event }, "Ignoring Spotify end_of_track event during transition");
+              continue;
+            }
             if (this.isEventForActiveTrack(event)) {
               this.handleTrackEnd(onEnd);
             } else {
               this.logger.debug({ event, activeTrackUri: this.activeTrackUri }, "Ignoring stale Spotify end_of_track event");
             }
           } else if (event.PLAYER_EVENT === "unavailable") {
+            if (this.transitionInFlight) {
+              this.logger.debug({ event }, "Ignoring Spotify unavailable event during transition");
+              continue;
+            }
             if (this.isEventForActiveTrack(event)) {
               this.logger.warn({ event }, "Spotify track unavailable");
               this.handleTrackEnd(onEnd);
@@ -384,21 +458,75 @@ export class SpotifyPlaybackEngine {
   }
 
   private attachPlayerToStream(player: AudioPlayer): void {
-    const encodedStream = this.librespot?.stdout;
-    if (!encodedStream) {
-      throw new Error("librespot encoded stdout is not available");
+    const stream = this.librespot?.stdout;
+    if (!stream) {
+      throw new Error("librespot stdout is not available");
     }
-    player.playEncodedStream(encodedStream, {
-      inputFormat: "ogg",
-      cleanup: () => {
-        if (!this.playbackStarted) return;
-        this.pause().catch((err) => {
-          this.logger.warn({ err }, "Failed to pause Spotify playback during cleanup");
-        });
-      },
-    });
+    const cleanup = () => {
+      if (!this.playbackStarted) return;
+      this.pause().catch((err) => {
+        this.logger.warn({ err }, "Failed to pause Spotify playback during cleanup");
+      });
+    };
+    if (this.currentOutputMode === "encoded") {
+      player.playEncodedStream(stream, {
+        inputFormat: "ogg",
+        cleanup,
+      });
+    } else {
+      player.playPcmStream(stream, {
+        inputSampleRate: 44100,
+        cleanup,
+      });
+    }
     this.attachedPlayer = player;
     this.streamAttached = true;
+  }
+
+  private async preparePcmBoundary(player: AudioPlayer, nextElapsedSeconds: number): Promise<void> {
+    if (player.getState() === "idle") {
+      player.markSeek(nextElapsedSeconds);
+      return;
+    }
+    player.pause();
+    await this.pauseForTransition();
+    const deadline = Date.now() + PCM_SWITCH_TIMEOUT_MS;
+    let zeroSince = 0;
+    while (Date.now() < deadline) {
+      player.flushBufferedAudio();
+      const buffered = player.getBufferedAudioBytes();
+      if (buffered === 0) {
+        if (zeroSince === 0) zeroSince = Date.now();
+        if (Date.now() - zeroSince >= PCM_SWITCH_QUIET_WINDOW_MS) break;
+      } else {
+        zeroSince = 0;
+      }
+      await sleep(40);
+    }
+    player.flushBufferedAudio();
+    player.markSeek(nextElapsedSeconds);
+    this.logger.info(
+      { bufferedBytes: player.getBufferedAudioBytes(), nextElapsedSeconds },
+      "Prepared PCM boundary for Spotify transition",
+    );
+  }
+
+  private async pauseForTransition(): Promise<void> {
+    if (!this.activeAccountId || !this.playbackStarted) return;
+    try {
+      await this.provider.pausePlayback(this.activeAccountId, this.activeDeviceId);
+    } catch (err) {
+      this.logger.warn({ err }, "Failed to pause Spotify playback before transition");
+    }
+  }
+
+  private async withTransition<T>(fn: () => Promise<T>): Promise<T> {
+    this.transitionInFlight = true;
+    try {
+      return await fn();
+    } finally {
+      this.transitionInFlight = false;
+    }
   }
 
   private isEventForActiveTrack(event: { TRACK_ID?: string; URI?: string }): boolean {

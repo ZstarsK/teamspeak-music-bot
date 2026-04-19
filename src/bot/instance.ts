@@ -991,7 +991,6 @@ export class BotInstance extends EventEmitter {
     const current = this.queue.current();
     if (current?.platform === "spotify") {
       await this.spotifyPlayback?.seek(seconds);
-      this.player.markSeek(seconds);
       this.emit("stateChange");
       return;
     }

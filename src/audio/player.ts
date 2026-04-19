@@ -532,8 +532,21 @@ export class AudioPlayer extends EventEmitter {
     this.nextFrameTime = performance.now();
   }
 
+  flushBufferedAudio(): void {
+    this.pcmBuffer = Buffer.alloc(0);
+    if (this.ffmpegPaused && this.ffmpeg?.stdout) {
+      this.ffmpeg.stdout.resume();
+      this.ffmpegPaused = false;
+    }
+    this.nextFrameTime = performance.now();
+  }
+
   getSeekOffset(): number {
     return this.seekOffset;
+  }
+
+  getBufferedAudioBytes(): number {
+    return this.pcmBuffer.length;
   }
 
   pause(): void {
