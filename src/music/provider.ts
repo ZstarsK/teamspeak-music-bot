@@ -1,4 +1,4 @@
-export type MusicPlatform = "netease" | "qq" | "bilibili" | "youtube";
+export type MusicPlatform = "netease" | "qq" | "bilibili" | "youtube" | "spotify";
 
 export interface MusicAccount {
   id: string;

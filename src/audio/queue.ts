@@ -10,7 +10,7 @@ export interface QueuedSong {
   name: string;
   artist: string;
   album: string;
-  platform: "netease" | "qq" | "bilibili" | "youtube";
+  platform: "netease" | "qq" | "bilibili" | "youtube" | "spotify";
   url?: string; // resolved lazily at play time
   mediaId?: string;
   accountId?: string;

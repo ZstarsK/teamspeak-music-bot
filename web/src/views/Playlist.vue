@@ -68,7 +68,7 @@ interface SongItem {
   album: string;
   duration: number;
   coverUrl: string;
-  platform: 'netease' | 'qq' | 'bilibili' | 'youtube';
+  platform: 'netease' | 'qq' | 'bilibili' | 'youtube' | 'spotify';
   mediaId?: string;
   accountId?: string;
 }
@@ -79,21 +79,21 @@ const loading = ref(true);
 
 async function playAll() {
   const id = route.params.id as string;
-  const platform = (route.query.platform as string) || 'netease';
+  const platform = (route.query.platform as string) || 'spotify';
   const accountId = route.query.accountId as string | undefined;
   await store.playPlaylist(id, platform, undefined, accountId);
 }
 
 async function playSongAt(index: number) {
   const id = route.params.id as string;
-  const platform = (route.query.platform as string) || 'netease';
+  const platform = (route.query.platform as string) || 'spotify';
   const accountId = route.query.accountId as string | undefined;
   await store.playPlaylist(id, platform, index, accountId);
 }
 
 onMounted(async () => {
   const id = route.params.id as string;
-  const platform = (route.query.platform as string) || 'netease';
+  const platform = (route.query.platform as string) || 'spotify';
   const accountId = route.query.accountId as string | undefined;
 
   try {

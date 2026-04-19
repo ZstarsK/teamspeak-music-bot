@@ -165,6 +165,7 @@ interface UserPlaylistGroup {
 }
 
 function platformLabel(platform: string) {
+  if (platform === 'spotify') return 'Spotify';
   if (platform === 'qq') return 'QQ音乐';
   if (platform === 'bilibili') return 'B站';
   if (platform === 'youtube') return 'YouTube';

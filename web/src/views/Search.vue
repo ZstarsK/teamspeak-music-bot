@@ -60,16 +60,17 @@ import SongCard from '../components/SongCard.vue';
 const store = usePlayerStore();
 const route = useRoute();
 
-type SearchPlatform = 'netease' | 'qq' | 'bilibili';
+type SearchPlatform = 'spotify' | 'qq' | 'netease' | 'bilibili';
 
 const platforms = [
-  { value: 'netease', label: '网易云' },
+  { value: 'spotify', label: 'Spotify' },
   { value: 'qq', label: 'QQ音乐' },
+  { value: 'netease', label: '网易云' },
   { value: 'bilibili', label: 'B站' },
 ] satisfies Array<{ value: SearchPlatform; label: string }>;
 
 const query = ref((route.query.q as string) || '');
-const activePlatform = ref<SearchPlatform>('netease');
+const activePlatform = ref<SearchPlatform>('spotify');
 const resultsByPlatform = reactive<Record<SearchPlatform, Array<{
   id: string;
   name: string;
@@ -77,18 +78,20 @@ const resultsByPlatform = reactive<Record<SearchPlatform, Array<{
   album: string;
   duration: number;
   coverUrl: string;
-  platform: 'netease' | 'qq' | 'bilibili' | 'youtube';
+  platform: 'netease' | 'qq' | 'bilibili' | 'youtube' | 'spotify';
   mediaId?: string;
   accountId?: string;
 }>>>({
   netease: [],
   qq: [],
   bilibili: [],
+  spotify: [],
 });
 const searchedPlatforms = reactive<Record<SearchPlatform, boolean>>({
   netease: false,
   qq: false,
   bilibili: false,
+  spotify: false,
 });
 const loading = ref(false);
 const lastSearchedQuery = ref('');

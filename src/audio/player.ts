@@ -118,6 +118,7 @@ export class AudioPlayer extends EventEmitter {
   private lastFrameAt = 0;
   private duckingConfig: DuckingSettings = getDefaultDuckingSettings();
   private readonly maxVolume: number;
+  private cleanupCurrentSource: (() => void | Promise<void>) | null = null;
 
   constructor(logger: Logger, options: AudioPlayerOptions = {}) {
     super();
@@ -128,29 +129,6 @@ export class AudioPlayer extends EventEmitter {
   }
 
   play(url: string, seekSeconds = 0): void {
-    this.stop();
-    this.sessionId++;
-    const playSessionId = this.sessionId;
-    this.currentUrl = url;
-    this.seekOffset = seekSeconds;
-    this.framesPlayed = 0;
-    this.lastFrameAt = 0;
-    this.ffmpegPaused = false;
-    this.spawnFailed = false;
-
-    // Prevent rapid-fire spawn attempts when ffmpeg is broken
-    if (this.consecutiveFailures >= AudioPlayer.MAX_CONSECUTIVE_FAILURES) {
-      this.logger.error(
-        { failures: this.consecutiveFailures, ffmpeg: getFfmpegCommand() },
-        "Too many consecutive ffmpeg failures — ffmpeg binary may be missing or broken. Stopping playback."
-      );
-      this.state = "idle";
-      this.emit("error", new Error("ffmpeg unavailable after repeated failures"));
-      return;
-    }
-
-    this.logger.info({ url: url.slice(0, 80), seek: seekSeconds }, "Starting playback");
-
     const args: string[] = [];
 
     // BiliBili CDN requires Referer header for audio playback
@@ -176,6 +154,85 @@ export class AudioPlayer extends EventEmitter {
       "-ac", "2",
       "-acodec", "pcm_s16le",
       "-",
+    );
+
+    this.playWithFfmpegArgs(args, {
+      source: "url",
+      display: url.slice(0, 80),
+      currentUrl: url,
+      seekSeconds,
+    });
+  }
+
+  playPcmPipe(
+    pipePath: string,
+    options: {
+      inputSampleRate?: number;
+      seekSeconds?: number;
+      cleanup?: () => void | Promise<void>;
+    } = {},
+  ): void {
+    const seekSeconds = options.seekSeconds ?? 0;
+    const args: string[] = [];
+    if (seekSeconds > 0) {
+      args.push("-ss", String(seekSeconds));
+    }
+    args.push(
+      "-f", "s16le",
+      "-ar", String(options.inputSampleRate ?? 44100),
+      "-ac", "2",
+      "-i", pipePath,
+      "-f", "s16le",
+      "-ar", "48000",
+      "-ac", "2",
+      "-acodec", "pcm_s16le",
+      "-",
+    );
+
+    this.playWithFfmpegArgs(args, {
+      source: "pcm-pipe",
+      display: pipePath,
+      currentUrl: `pipe:${pipePath}`,
+      seekSeconds,
+      cleanup: options.cleanup,
+    });
+  }
+
+  private playWithFfmpegArgs(
+    args: string[],
+    options: {
+      source: string;
+      display: string;
+      currentUrl: string;
+      seekSeconds: number;
+      cleanup?: () => void | Promise<void>;
+    },
+  ): void {
+    this.stop();
+    this.sessionId++;
+    const playSessionId = this.sessionId;
+    this.currentUrl = options.currentUrl;
+    this.seekOffset = options.seekSeconds;
+    this.framesPlayed = 0;
+    this.lastFrameAt = 0;
+    this.ffmpegPaused = false;
+    this.spawnFailed = false;
+    this.cleanupCurrentSource = options.cleanup ?? null;
+
+    // Prevent rapid-fire spawn attempts when ffmpeg is broken
+    if (this.consecutiveFailures >= AudioPlayer.MAX_CONSECUTIVE_FAILURES) {
+      this.logger.error(
+        { failures: this.consecutiveFailures, ffmpeg: getFfmpegCommand() },
+        "Too many consecutive ffmpeg failures — ffmpeg binary may be missing or broken. Stopping playback."
+      );
+      this.state = "idle";
+      this.emit("error", new Error("ffmpeg unavailable after repeated failures"));
+      return;
+    }
+
+    this.logger.info(
+      { source: options.source, input: options.display, seek: options.seekSeconds },
+      "Starting playback",
     );
 
     const ffmpegBin = getFfmpegCommand();
@@ -365,6 +422,16 @@ export class AudioPlayer extends EventEmitter {
     this.play(this.currentUrl, seconds);
   }
 
+  markSeek(seconds: number): void {
+    if (!Number.isFinite(seconds) || seconds < 0) {
+      this.logger.warn({ seek: seconds }, "Ignoring invalid seek position");
+      return;
+    }
+    this.seekOffset = seconds;
+    this.framesPlayed = 0;
+    this.nextFrameTime = performance.now();
+  }
+
   getSeekOffset(): number {
     return this.seekOffset;
   }
@@ -390,6 +457,13 @@ export class AudioPlayer extends EventEmitter {
     if (this.ffmpeg) {
       this.ffmpeg.kill("SIGTERM");
       this.ffmpeg = null;
+    }
+    const cleanup = this.cleanupCurrentSource;
+    this.cleanupCurrentSource = null;
+    if (cleanup) {
+      Promise.resolve()
+        .then(() => cleanup())
+        .catch((err) => this.logger.warn({ err }, "Playback source cleanup failed"));
     }
     this.pcmBuffer = Buffer.alloc(0);
     this.ffmpegPaused = false;

@@ -3,21 +3,26 @@ import type { MusicProvider } from "../../music/provider.js";
 import { NeteaseProvider } from "../../music/netease.js";
 import { QQMusicProvider } from "../../music/qq.js";
 import { YouTubeProvider } from "../../music/youtube.js";
+import type { SpotifyProvider } from "../../music/spotify.js";
 import type { Logger } from "../../logger.js";
 
 export function createMusicRouter(
   neteaseProvider: NeteaseProvider,
   qqProvider: QQMusicProvider,
   bilibiliProvider: MusicProvider,
-  logger: Logger
+  logger: Logger,
+  spotifyProvider?: SpotifyProvider,
 ): Router {
   const router = Router();
   const youtubeProvider: MusicProvider = new YouTubeProvider();
 
   function getProvider(platform?: string): MusicProvider {
+    if (platform === "spotify" && spotifyProvider) return spotifyProvider;
     if (platform === "bilibili") return bilibiliProvider;
     if (platform === "youtube") return youtubeProvider;
-    return platform === "qq" ? qqProvider : neteaseProvider;
+    if (platform === "qq") return qqProvider;
+    if (platform === "netease") return neteaseProvider;
+    return spotifyProvider?.hasAccount() ? spotifyProvider : neteaseProvider;
   }
 
   router.get("/search", async (req, res) => {
@@ -47,13 +52,17 @@ export function createMusicRouter(
         return;
       }
       const parsedLimit = parseInt(limit as string) || 20;
-      const [neteaseResult, qqResult, bilibiliResult] = await Promise.allSettled([
+      const [spotifyResult, neteaseResult, qqResult, bilibiliResult] = await Promise.allSettled([
+        spotifyProvider ? spotifyProvider.search(q as string, parsedLimit) : Promise.resolve({ songs: [], playlists: [], albums: [] }),
         neteaseProvider.search(q as string, parsedLimit),
         qqProvider.search(q as string, parsedLimit),
         bilibiliProvider.search(q as string, parsedLimit),
       ]);
 
       const songs = [
+        ...(spotifyResult.status === "fulfilled"
+          ? spotifyResult.value.songs
+          : []),
         ...(neteaseResult.status === "fulfilled"
           ? neteaseResult.value.songs
           : []),
@@ -91,6 +100,8 @@ export function createMusicRouter(
         ? await qqProvider.getPlaylistSongsForAccount(req.params.id, accountId)
         : platform === "netease"
           ? await neteaseProvider.getPlaylistSongsForAccount(req.params.id, accountId)
+        : platform === "spotify" && spotifyProvider
+          ? await spotifyProvider.getPlaylistSongsForAccount(req.params.id, accountId)
         : await provider.getPlaylistSongs(req.params.id);
       res.json({ songs });
     } catch (err) {
@@ -172,7 +183,7 @@ export function createMusicRouter(
         return;
       }
 
-      const candidates = [neteaseProvider, qqProvider];
+      const candidates = [spotifyProvider, neteaseProvider, qqProvider].filter(Boolean) as MusicProvider[];
       const results = await Promise.allSettled(
         candidates.map((provider) => provider.getUserPlaylists ? provider.getUserPlaylists() : Promise.resolve([]))
       );
@@ -197,6 +208,13 @@ export function createMusicRouter(
         }
       } else if (platform === "netease") {
         const playlist = await neteaseProvider.getPlaylistDetailForAccount(req.params.id, accountId);
+        if (playlist) {
+          res.json({ playlist });
+          return;
+        }
+      } else if (platform === "spotify" && spotifyProvider) {
+        const accountId = typeof req.query.accountId === "string" ? req.query.accountId : undefined;
+        const playlist = await spotifyProvider.getPlaylistDetail(req.params.id, accountId);
         if (playlist) {
           res.json({ playlist });
           return;
@@ -238,6 +256,7 @@ export function createMusicRouter(
       netease: neteaseProvider.getQuality(),
       qq: qqProvider.getQuality(),
       bilibili: bilibiliProvider.getQuality(),
+      spotify: spotifyProvider?.getQuality() ?? "320",
     });
   });
 

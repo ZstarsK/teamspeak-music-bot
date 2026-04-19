@@ -166,6 +166,77 @@
     <section class="settings-section">
       <h2 class="section-title">音乐账号</h2>
 
+      <!-- Spotify -->
+      <div class="account-card">
+        <div class="account-header">
+          <Icon icon="mdi:spotify" class="account-icon spotify-icon" />
+          <div class="account-info">
+            <div class="account-name">Spotify</div>
+            <div class="account-status" :class="{ logged: spotifyAuth.loggedIn }">
+              {{ spotifyAuth.loggedIn ? `已登录: ${spotifyAuth.nickname}` : spotifyConfig.configured ? '未登录' : '未配置 OAuth' }}
+            </div>
+          </div>
+        </div>
+
+        <div class="login-methods">
+          <button
+            class="login-btn"
+            :disabled="!spotifyConfig.configured"
+            @click="startSpotifyLogin"
+          >
+            <Icon icon="mdi:login" />
+            Spotify 登录
+          </button>
+        </div>
+        <div v-if="!spotifyConfig.configured" class="setting-help">
+          需要先在 config.json 配置 spotifyClientId、spotifyClientSecret 和 spotifyRedirectUri。
+        </div>
+        <div v-else class="setting-help">
+          Redirect URI: {{ spotifyConfig.redirectUri }}
+        </div>
+
+        <div v-if="spotifyAccounts.length > 0" class="linked-accounts">
+          <div class="linked-accounts-title">已登录账号</div>
+          <div
+            v-for="account in spotifyAccounts"
+            :key="account.id"
+            class="linked-account-item"
+          >
+            <img
+              v-if="account.avatarUrl"
+              :src="account.avatarUrl"
+              alt=""
+              class="linked-account-avatar"
+            />
+            <div v-else class="linked-account-avatar linked-account-avatar--placeholder">S</div>
+            <div class="linked-account-meta">
+              <div class="linked-account-name">{{ account.name }}</div>
+              <div
+                class="linked-account-subtitle"
+                :class="{ invalid: account.valid === false }"
+              >
+                {{ account.primary ? '主账号' : '附加账号' }} · {{ account.valid === false ? '已失效' : '有效' }}
+              </div>
+            </div>
+            <div class="linked-account-actions">
+              <button
+                class="btn-sm"
+                :disabled="account.primary"
+                @click="setPrimarySpotifyAccount(account.id)"
+              >
+                {{ account.primary ? '当前主账号' : '设为主账号' }}
+              </button>
+              <button
+                class="btn-sm btn-delete"
+                @click="removeAccount('spotify', account.id, account.name)"
+              >
+                删除
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- NetEase -->
       <div class="account-card">
         <div class="account-header">
@@ -530,6 +601,7 @@ import { Icon } from '@iconify/vue';
 import axios from 'axios';
 import QRCode from 'qrcode';
 import { usePlayerStore } from '../stores/player.js';
+import { withBasePath } from '../lib/base.js';
 
 const store = usePlayerStore();
 
@@ -608,6 +680,8 @@ const bilibiliLoginMode = ref<'qr' | 'cookie' | null>(null);
 const neteaseAuth = reactive({ loggedIn: false, nickname: '', avatarUrl: '' });
 const qqAuth = reactive({ loggedIn: false, nickname: '', avatarUrl: '' });
 const bilibiliAuth = reactive({ loggedIn: false, nickname: '', avatarUrl: '' });
+const spotifyAuth = reactive({ loggedIn: false, nickname: '', avatarUrl: '' });
+const spotifyConfig = reactive({ configured: false, redirectUri: '' });
 type ManagedAccount = {
   id: string;
   name: string;
@@ -618,6 +692,7 @@ type ManagedAccount = {
 };
 const neteaseAccounts = ref<ManagedAccount[]>([]);
 const qqAccounts = ref<ManagedAccount[]>([]);
+const spotifyAccounts = ref<ManagedAccount[]>([]);
 
 // QR state
 interface QrState {
@@ -653,9 +728,28 @@ async function checkAuthStatus() {
     Object.assign(neteaseAuth, nRes.data);
     Object.assign(qqAuth, qRes.data);
     Object.assign(bilibiliAuth, bRes.data);
+    try {
+      const sRes = await axios.get('/api/auth/status', { params: { platform: 'spotify' } });
+      Object.assign(spotifyAuth, sRes.data);
+    } catch {
+      Object.assign(spotifyAuth, { loggedIn: false, nickname: '', avatarUrl: '' });
+    }
   } catch {
     // API not ready
   }
+}
+
+async function loadSpotifyConfig() {
+  try {
+    const res = await axios.get('/api/auth/spotify/config');
+    Object.assign(spotifyConfig, res.data);
+  } catch {
+    Object.assign(spotifyConfig, { configured: false, redirectUri: '' });
+  }
+}
+
+function startSpotifyLogin() {
+  window.location.href = withBasePath('/api/auth/spotify/login');
 }
 
 async function loadQqAccounts() {
@@ -673,6 +767,28 @@ async function loadNeteaseAccounts() {
     neteaseAccounts.value = res.data.accounts ?? [];
   } catch {
     neteaseAccounts.value = [];
+  }
+}
+
+async function loadSpotifyAccounts() {
+  try {
+    const res = await axios.get('/api/auth/accounts', { params: { platform: 'spotify' } });
+    spotifyAccounts.value = res.data.accounts ?? [];
+  } catch {
+    spotifyAccounts.value = [];
+  }
+}
+
+async function setPrimarySpotifyAccount(accountId: string) {
+  try {
+    await axios.post('/api/auth/accounts/primary', { platform: 'spotify', accountId });
+    await Promise.all([
+      checkAuthStatus(),
+      loadSpotifyAccounts(),
+    ]);
+    store.lastFetchTime = 0;
+  } catch {
+    // Ignore
   }
 }
 
@@ -702,7 +818,7 @@ async function setPrimaryNeteaseAccount(accountId: string) {
   }
 }
 
-async function removeAccount(platform: 'netease' | 'qq', accountId: string, accountName: string) {
+async function removeAccount(platform: 'netease' | 'qq' | 'spotify', accountId: string, accountName: string) {
   if (!confirm(`确认删除账号 "${accountName}"？`)) return;
   try {
     await axios.delete('/api/auth/accounts', {
@@ -710,7 +826,11 @@ async function removeAccount(platform: 'netease' | 'qq', accountId: string, acco
     });
     await Promise.all([
       checkAuthStatus(),
-      platform === 'qq' ? loadQqAccounts() : loadNeteaseAccounts(),
+      platform === 'qq'
+        ? loadQqAccounts()
+        : platform === 'spotify'
+          ? loadSpotifyAccounts()
+          : loadNeteaseAccounts(),
     ]);
     store.lastFetchTime = 0;
   } catch {
@@ -920,7 +1040,9 @@ async function saveBotSettings() {
 
 onMounted(() => {
   store.fetchBots(); // Refresh bot status on page visit
+  loadSpotifyConfig();
   checkAuthStatus();
+  loadSpotifyAccounts();
   loadNeteaseAccounts();
   loadQqAccounts();
   loadQuality();
@@ -1103,6 +1225,10 @@ onUnmounted(() => {
 
   &.bilibili-icon {
     color: #00a1d6;
+  }
+
+  &.spotify-icon {
+    color: #1db954;
   }
 }
 

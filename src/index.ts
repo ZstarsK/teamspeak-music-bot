@@ -7,6 +7,7 @@ import { createApiServerManager } from "./music/api-server.js";
 import { NeteaseProvider } from "./music/netease.js";
 import { QQMusicProvider } from "./music/qq.js";
 import { BiliBiliProvider } from "./music/bilibili.js";
+import { SpotifyProvider } from "./music/spotify.js";
 import { createCookieStore } from "./music/auth.js";
 import { BotManager } from "./bot/manager.js";
 import { createWebServer } from "./web/server.js";
@@ -18,6 +19,7 @@ const CONFIG_PATH = path.join(ROOT_DIR, "config.json");
 const DB_PATH = path.join(DATA_DIR, "tsmusicbot.db");
 const LOG_DIR = path.join(DATA_DIR, "logs");
 const COOKIE_DIR = path.join(DATA_DIR, "cookies");
+const SPOTIFY_CACHE_DIR = path.join(DATA_DIR, "spotify-librespot");
 const STATIC_DIR = path.join(ROOT_DIR, "web", "dist");
 
 async function main() {
@@ -44,6 +46,7 @@ async function main() {
   const neteaseProvider = new NeteaseProvider(apiServer.getNeteaseBaseUrl());
   const qqProvider = new QQMusicProvider(apiServer.getQQMusicBaseUrl());
   const bilibiliProvider = new BiliBiliProvider();
+  const spotifyProvider = new SpotifyProvider(config, logger);
 
   const cookieStore = createCookieStore(COOKIE_DIR);
   const neteaseAccounts = cookieStore.loadNeteaseAccounts();
@@ -86,6 +89,22 @@ async function main() {
   }
   const bilibiliCookie = cookieStore.load("bilibili");
   if (bilibiliCookie) bilibiliProvider.setCookie(bilibiliCookie);
+  spotifyProvider.loadAccounts(
+    cookieStore.loadSpotifyAccounts(),
+    cookieStore.getSpotifyPrimaryId(),
+  );
+  spotifyProvider.setAccountChangeHandler((account, makePrimary = false) => {
+    cookieStore.saveSpotifyAccount({
+      userId: account.userId,
+      displayName: account.displayName,
+      accessToken: account.accessToken,
+      refreshToken: account.refreshToken,
+      tokenType: account.tokenType,
+      scope: account.scope,
+      expiresAt: account.expiresAt,
+      avatarUrl: account.avatarUrl,
+    }, makePrimary);
+  });
 
   const botManager = new BotManager(
     neteaseProvider,
@@ -94,6 +113,8 @@ async function main() {
     db,
     config,
     logger,
+    spotifyProvider,
+    SPOTIFY_CACHE_DIR,
   );
   await botManager.loadSavedBots();
 
@@ -103,6 +124,7 @@ async function main() {
     neteaseProvider,
     qqProvider,
     bilibiliProvider,
+    spotifyProvider,
     database: db,
     config,
     configPath: CONFIG_PATH,

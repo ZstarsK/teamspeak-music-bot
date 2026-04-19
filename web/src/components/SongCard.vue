@@ -7,8 +7,8 @@
         <span class="song-name">{{ song.name }}</span>
         <span
           class="platform-badge"
-          :class="song.platform === 'bilibili' ? 'badge-bilibili' : song.platform === 'qq' ? 'badge-qq' : song.platform === 'youtube' ? 'badge-youtube' : 'badge-netease'"
-        >{{ song.platform === 'bilibili' ? 'B站' : song.platform === 'qq' ? 'QQ' : song.platform === 'youtube' ? 'YouTube' : '网易云' }}</span>
+          :class="song.platform === 'bilibili' ? 'badge-bilibili' : song.platform === 'qq' ? 'badge-qq' : song.platform === 'youtube' ? 'badge-youtube' : song.platform === 'spotify' ? 'badge-spotify' : 'badge-netease'"
+        >{{ song.platform === 'bilibili' ? 'B站' : song.platform === 'qq' ? 'QQ' : song.platform === 'youtube' ? 'YouTube' : song.platform === 'spotify' ? 'Spotify' : '网易云' }}</span>
       </div>
       <div class="song-artist">{{ song.artist }}</div>
     </div>
@@ -121,6 +121,11 @@ function formatDuration(seconds: number): string {
 .badge-youtube {
   background: rgba(255, 0, 0, 0.12);
   color: #ff0000;
+}
+
+.badge-spotify {
+  background: rgba(30, 215, 96, 0.15);
+  color: #1db954;
 }
 
 .song-artist {

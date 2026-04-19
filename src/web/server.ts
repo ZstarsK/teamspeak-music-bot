@@ -6,6 +6,7 @@ import type { BotManager } from "../bot/manager.js";
 import type { MusicProvider } from "../music/provider.js";
 import type { NeteaseProvider } from "../music/netease.js";
 import type { QQMusicProvider } from "../music/qq.js";
+import type { SpotifyProvider } from "../music/spotify.js";
 import type { BotDatabase } from "../data/database.js";
 import type { BotConfig } from "../data/config.js";
 import type { Logger } from "../logger.js";
@@ -22,6 +23,7 @@ export interface WebServerOptions {
   neteaseProvider: NeteaseProvider;
   qqProvider: QQMusicProvider;
   bilibiliProvider: MusicProvider;
+  spotifyProvider?: SpotifyProvider;
   database: BotDatabase;
   config: BotConfig;
   configPath: string;
@@ -58,7 +60,7 @@ export function createWebServer(options: WebServerOptions): WebServer {
   );
   app.use(
     "/api/music",
-    createMusicRouter(options.neteaseProvider, options.qqProvider, options.bilibiliProvider, logger)
+    createMusicRouter(options.neteaseProvider, options.qqProvider, options.bilibiliProvider, logger, options.spotifyProvider)
   );
   app.use("/api/player", createPlayerRouter(
     options.botManager, logger, options.database,
@@ -66,7 +68,7 @@ export function createWebServer(options: WebServerOptions): WebServer {
   ));
   app.use(
     "/api/auth",
-    createAuthRouter(options.neteaseProvider, options.qqProvider, options.bilibiliProvider, logger, options.cookieStore)
+    createAuthRouter(options.neteaseProvider, options.qqProvider, options.bilibiliProvider, logger, options.cookieStore, options.spotifyProvider, options.config)
   );
 
   app.get("/api/health", (_req, res) => {

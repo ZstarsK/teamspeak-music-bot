@@ -1,33 +1,66 @@
 import { Router } from "express";
+import crypto from "node:crypto";
 import type { MusicProvider } from "../../music/provider.js";
 import { YouTubeProvider } from "../../music/youtube.js";
 import type { CookieStore } from "../../music/auth.js";
 import { QQMusicProvider } from "../../music/qq.js";
 import { NeteaseProvider } from "../../music/netease.js";
+import type { SpotifyProvider } from "../../music/spotify.js";
 import type { Logger } from "../../logger.js";
+import type { BotConfig } from "../../data/config.js";
 
 export function createAuthRouter(
   neteaseProvider: NeteaseProvider,
   qqProvider: QQMusicProvider,
   bilibiliProvider: MusicProvider,
   logger: Logger,
-  cookieStore?: CookieStore
+  cookieStore?: CookieStore,
+  spotifyProvider?: SpotifyProvider,
+  config?: BotConfig,
 ): Router {
   const router = Router();
+  const spotifyStates = new Map<string, { redirectUri: string; frontendBase: string; expiresAt: number }>();
   // YouTube is auth-less; we only use this instance so /auth/status can
   // report whether yt-dlp is actually installed (loggedIn=false otherwise).
   const youtubeProvider: MusicProvider = new YouTubeProvider();
 
   function getProvider(platform?: string): MusicProvider {
+    if (platform === "spotify" && spotifyProvider) return spotifyProvider;
     if (platform === "bilibili") return bilibiliProvider;
     if (platform === "youtube") return youtubeProvider;
-    return platform === "qq" ? qqProvider : neteaseProvider;
+    if (platform === "qq") return qqProvider;
+    if (platform === "netease") return neteaseProvider;
+    return spotifyProvider?.hasAccount() ? spotifyProvider : neteaseProvider;
   }
 
-  function getAccountProvider(platform?: string): NeteaseProvider | QQMusicProvider | null {
+  function getAccountProvider(platform?: string): NeteaseProvider | QQMusicProvider | SpotifyProvider | null {
+    if (platform === "spotify" && spotifyProvider) return spotifyProvider;
     if (platform === "qq") return qqProvider;
     if (platform === "netease") return neteaseProvider;
     return null;
+  }
+
+  function getSpotifyRedirectUri(req: any, frontendBase = getFrontendBase(req)): string {
+    const configured = (config?.spotifyRedirectUri ?? "").trim();
+    if (configured) return configured;
+    return `${frontendBase}/api/auth/spotify/callback`;
+  }
+
+  function getFrontendBase(req: any): string {
+    const publicUrl = (config?.publicUrl ?? "").trim().replace(/\/+$/, "");
+    if (publicUrl) return publicUrl;
+    const referer = req.get("referer");
+    if (referer) {
+      try {
+        const url = new URL(referer);
+        const pathname = url.pathname.replace(/\/+$/, "");
+        const basePath = pathname.replace(/\/(?:settings|search|playlist|history|lyrics|setup|bot)(?:\/.*)?$/, "");
+        return `${url.origin}${basePath}`;
+      } catch {
+        // Fall through to request host.
+      }
+    }
+    return `${req.protocol}://${req.get("host")}`;
   }
 
   async function persistCookieForPlatform(
@@ -73,7 +106,7 @@ export function createAuthRouter(
     const platform = req.query.platform as string;
     const provider = getAccountProvider(platform);
     if (!provider) {
-      res.status(400).json({ error: "Only NetEase and QQ accounts are supported here" });
+      res.status(400).json({ error: "Only NetEase, QQ and Spotify accounts are supported here" });
       return;
     }
     const accounts = await provider.getAccountsWithStatus();
@@ -88,7 +121,7 @@ export function createAuthRouter(
     const { platform, accountId } = req.body ?? {};
     const provider = getAccountProvider(platform);
     if (!provider) {
-      res.status(400).json({ error: "Only NetEase and QQ accounts are supported here" });
+      res.status(400).json({ error: "Only NetEase, QQ and Spotify accounts are supported here" });
       return;
     }
     if (typeof accountId !== "string" || !accountId) {
@@ -100,7 +133,9 @@ export function createAuthRouter(
       return;
     }
     if (cookieStore) {
-      const ok = platform === "qq"
+      const ok = platform === "spotify"
+        ? cookieStore.setSpotifyPrimary(accountId)
+        : platform === "qq"
         ? cookieStore.setQQPrimary(accountId)
         : cookieStore.setNeteasePrimary(accountId);
       if (!ok) {
@@ -120,7 +155,7 @@ export function createAuthRouter(
     const { platform, accountId } = req.body ?? {};
     const provider = getAccountProvider(platform);
     if (!provider) {
-      res.status(400).json({ error: "Only NetEase and QQ accounts are supported here" });
+      res.status(400).json({ error: "Only NetEase, QQ and Spotify accounts are supported here" });
       return;
     }
     if (typeof accountId !== "string" || !accountId) {
@@ -128,7 +163,9 @@ export function createAuthRouter(
       return;
     }
     if (cookieStore) {
-      const ok = platform === "qq"
+      const ok = platform === "spotify"
+        ? cookieStore.removeSpotifyAccount(accountId)
+        : platform === "qq"
         ? cookieStore.removeQQAccount(accountId)
         : cookieStore.removeNeteaseAccount(accountId);
       if (!ok) {
@@ -145,6 +182,77 @@ export function createAuthRouter(
       primaryAccountId: provider.getPrimaryAccountId(),
       accounts: provider.getAccounts(),
     });
+  });
+
+  router.get("/spotify/config", (req, res) => {
+    res.json({
+      configured: Boolean(config?.spotifyClientId && config?.spotifyClientSecret),
+      redirectUri: spotifyProvider ? getSpotifyRedirectUri(req) : "",
+    });
+  });
+
+  router.get("/spotify/login", (req, res) => {
+    try {
+      if (!spotifyProvider) {
+        res.status(400).json({ error: "Spotify provider is not enabled" });
+        return;
+      }
+      const state = crypto.randomBytes(16).toString("hex");
+      const frontendBase = getFrontendBase(req);
+      const redirectUri = getSpotifyRedirectUri(req, frontendBase);
+      spotifyStates.set(state, {
+        redirectUri,
+        frontendBase,
+        expiresAt: Date.now() + 10 * 60 * 1000,
+      });
+      res.redirect(spotifyProvider.createAuthorizationUrl(redirectUri, state));
+    } catch (err) {
+      logger.error({ err }, "Spotify OAuth login failed");
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  router.get("/spotify/callback", async (req, res) => {
+    try {
+      if (!spotifyProvider) {
+        res.status(400).send("Spotify provider is not enabled");
+        return;
+      }
+      const { code, state, error } = req.query;
+      const stateEntry = typeof state === "string" ? spotifyStates.get(state) : undefined;
+      const frontendBase = stateEntry?.frontendBase ?? getFrontendBase(req);
+      if (error) {
+        if (typeof state === "string") spotifyStates.delete(state);
+        res.redirect(`${frontendBase}/settings?spotify=denied`);
+        return;
+      }
+      if (typeof code !== "string" || typeof state !== "string") {
+        res.status(400).send("Missing Spotify OAuth code or state");
+        return;
+      }
+      spotifyStates.delete(state);
+      if (!stateEntry || stateEntry.expiresAt < Date.now()) {
+        res.status(400).send("Spotify OAuth state expired");
+        return;
+      }
+      const account = await spotifyProvider.exchangeCode(code, stateEntry.redirectUri, true);
+      if (cookieStore) {
+        cookieStore.saveSpotifyAccount({
+          userId: account.userId,
+          displayName: account.displayName,
+          accessToken: account.accessToken,
+          refreshToken: account.refreshToken,
+          tokenType: account.tokenType,
+          scope: account.scope,
+          expiresAt: account.expiresAt,
+          avatarUrl: account.avatarUrl,
+        }, true);
+      }
+      res.redirect(`${stateEntry.frontendBase}/settings?spotify=ok`);
+    } catch (err) {
+      logger.error({ err }, "Spotify OAuth callback failed");
+      res.status(500).send(`Spotify login failed: ${(err as Error).message}`);
+    }
   });
 
   router.post("/qrcode", async (req, res) => {

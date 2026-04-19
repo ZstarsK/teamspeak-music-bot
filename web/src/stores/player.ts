@@ -8,7 +8,7 @@ export interface Song {
   album: string;
   duration: number;
   coverUrl: string;
-  platform: 'netease' | 'qq' | 'bilibili' | 'youtube';
+  platform: 'netease' | 'qq' | 'bilibili' | 'youtube' | 'spotify';
   mediaId?: string;
   accountId?: string;
 }
@@ -263,31 +263,31 @@ export const usePlayerStore = defineStore('player', {
       this._syncAfterAction();
     },
 
-    async play(query: string, platform = 'netease') {
+    async play(query: string, platform = 'spotify') {
       if (!this.activeBotId) return;
       await axios.post(`/api/player/${this.activeBotId}/play`, { query, platform });
       this._setTiming(this.activeBotId, { serverElapsed: 0 });
       this._syncAfterAction();
     },
 
-    async playById(songId: string, platform = 'netease', song?: Song) {
+    async playById(songId: string, platform = 'spotify', song?: Song) {
       if (!this.activeBotId) return;
       await axios.post(`/api/player/${this.activeBotId}/play-by-id`, { songId, platform, song });
       this._setTiming(this.activeBotId, { serverElapsed: 0 });
       this._syncAfterAction();
     },
 
-    async addToQueue(query: string, platform = 'netease') {
+    async addToQueue(query: string, platform = 'spotify') {
       if (!this.activeBotId) return;
       await axios.post(`/api/player/${this.activeBotId}/add`, { query, platform });
     },
 
-    async addToQueueById(songId: string, platform = 'netease', song?: Song) {
+    async addToQueueById(songId: string, platform = 'spotify', song?: Song) {
       if (!this.activeBotId) return;
       await axios.post(`/api/player/${this.activeBotId}/add-by-id`, { songId, platform, song });
     },
 
-    async playPlaylist(playlistId: string, platform = 'netease', startIndex?: number, accountId?: string) {
+    async playPlaylist(playlistId: string, platform = 'spotify', startIndex?: number, accountId?: string) {
       if (!this.activeBotId) return;
       await axios.post(`/api/player/${this.activeBotId}/play-playlist`, {
         playlistId,

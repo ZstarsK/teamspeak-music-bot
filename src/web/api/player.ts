@@ -31,6 +31,7 @@ export function createPlayerRouter(
 
   /** Map API platform string to the corresponding command flag. */
   const platformFlag = (platform: unknown): string => {
+    if (platform === "spotify") return "-s";
     if (platform === "bilibili") return "-b";
     if (platform === "qq") return "-q";
     if (platform === "youtube") return "-y";
@@ -183,7 +184,7 @@ export function createPlayerRouter(
           .json({ error: "position must be a finite non-negative number" });
         return;
       }
-      bot.getPlayer().seek(position);
+      await bot.seek(position);
       res.json({ message: `Seeked to ${Math.floor(position)}s`, seekOffset: position });
     } catch (err) {
       res.status(500).json({ error: (err as Error).message });
@@ -276,7 +277,7 @@ export function createPlayerRouter(
       // Use the bot's own provider lookup — it already knows about youtube,
       // which the router's constructor params did not.
       const provider = bot.getProviderFor(
-        platform === "bilibili" || platform === "qq" || platform === "youtube"
+        platform === "bilibili" || platform === "qq" || platform === "youtube" || platform === "spotify"
           ? platform
           : "netease"
       );
@@ -334,7 +335,7 @@ export function createPlayerRouter(
         return;
       }
       const provider = bot.getProviderFor(
-        platform === "bilibili" || platform === "qq" || platform === "youtube"
+        platform === "bilibili" || platform === "qq" || platform === "youtube" || platform === "spotify"
           ? platform
           : "netease"
       );
@@ -374,7 +375,7 @@ export function createPlayerRouter(
         return;
       }
       const provider = bot.getProviderFor(
-        platform === "bilibili" || platform === "qq" || platform === "youtube"
+        platform === "bilibili" || platform === "qq" || platform === "youtube" || platform === "spotify"
           ? platform
           : "netease"
       );

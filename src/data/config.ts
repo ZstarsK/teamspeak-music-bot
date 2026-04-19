@@ -45,6 +45,11 @@ export interface BotConfig {
   // (nginx/Caddy/Cloudflare). Required for correct protocol/host detection
   // behind HTTPS-terminating proxies.
   trustProxy: boolean;
+  spotifyClientId: string;
+  spotifyClientSecret: string;
+  spotifyRedirectUri: string;
+  spotifyLibrespotPath: string;
+  spotifyDeviceName: string;
 }
 
 export function getDefaultConfig(): BotConfig {
@@ -64,6 +69,11 @@ export function getDefaultConfig(): BotConfig {
     maxVolume: DEFAULT_MAX_VOLUME,
     publicUrl: "",
     trustProxy: false,
+    spotifyClientId: "",
+    spotifyClientSecret: "",
+    spotifyRedirectUri: "",
+    spotifyLibrespotPath: "librespot",
+    spotifyDeviceName: "TSMusicBot Spotify",
   };
 }
 

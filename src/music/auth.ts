@@ -17,6 +17,19 @@ export interface StoredNeteaseAccount {
   updatedAt: string;
 }
 
+export interface StoredSpotifyAccount {
+  id: string;
+  userId: string;
+  displayName: string;
+  accessToken: string;
+  refreshToken: string;
+  tokenType: string;
+  scope: string;
+  expiresAt: number;
+  avatarUrl?: string;
+  updatedAt: string;
+}
+
 export interface CookieStore {
   save(platform: "netease" | "qq" | "bilibili", cookie: string): void;
   load(platform: "netease" | "qq" | "bilibili"): string;
@@ -38,6 +51,11 @@ export interface CookieStore {
   getQQPrimaryId(): string | null;
   setQQPrimary(accountId: string): boolean;
   removeQQAccount(accountId: string): boolean;
+  saveSpotifyAccount(account: Omit<StoredSpotifyAccount, "id" | "updatedAt">, makePrimary?: boolean): StoredSpotifyAccount;
+  loadSpotifyAccounts(): StoredSpotifyAccount[];
+  getSpotifyPrimaryId(): string | null;
+  setSpotifyPrimary(accountId: string): boolean;
+  removeSpotifyAccount(accountId: string): boolean;
 }
 
 export function createCookieStore(cookieDir: string): CookieStore {
@@ -52,6 +70,7 @@ export function createCookieStore(cookieDir: string): CookieStore {
 
   const qqFilePath = path.join(cookieDir, "qq.json");
   const neteaseFilePath = path.join(cookieDir, "netease.json");
+  const spotifyFilePath = path.join(cookieDir, "spotify.json");
 
   const readNeteaseState = (): {
     primaryId: string | null;
@@ -163,6 +182,55 @@ export function createCookieStore(cookieDir: string): CookieStore {
   const writeQQState = (state: { primaryId: string | null; accounts: StoredQQAccount[] }): void => {
     fs.writeFileSync(
       qqFilePath,
+      JSON.stringify(state, null, 2),
+      { encoding: "utf-8", mode: 0o600 },
+    );
+  };
+
+  const readSpotifyState = (): { primaryId: string | null; accounts: StoredSpotifyAccount[] } => {
+    if (!fs.existsSync(spotifyFilePath)) {
+      return { primaryId: null, accounts: [] };
+    }
+    try {
+      const raw = JSON.parse(fs.readFileSync(spotifyFilePath, "utf-8"));
+      const accounts: StoredSpotifyAccount[] = Array.isArray(raw?.accounts)
+        ? raw.accounts
+            .map((entry: any) => {
+              const userId = typeof entry?.userId === "string" ? entry.userId : "";
+              const accessToken = typeof entry?.accessToken === "string" ? entry.accessToken : "";
+              const refreshToken = typeof entry?.refreshToken === "string" ? entry.refreshToken : "";
+              if (!userId || !accessToken || !refreshToken) return null;
+              return {
+                id: typeof entry?.id === "string" && entry.id ? entry.id : `spotify:${userId}`,
+                userId,
+                displayName: typeof entry?.displayName === "string" && entry.displayName
+                  ? entry.displayName
+                  : userId,
+                accessToken,
+                refreshToken,
+                tokenType: typeof entry?.tokenType === "string" ? entry.tokenType : "Bearer",
+                scope: typeof entry?.scope === "string" ? entry.scope : "",
+                expiresAt: typeof entry?.expiresAt === "number" ? entry.expiresAt : 0,
+                avatarUrl: typeof entry?.avatarUrl === "string" ? entry.avatarUrl : undefined,
+                updatedAt: typeof entry?.updatedAt === "string"
+                  ? entry.updatedAt
+                  : new Date().toISOString(),
+              } satisfies StoredSpotifyAccount;
+            })
+            .filter((entry: StoredSpotifyAccount | null): entry is StoredSpotifyAccount => entry !== null)
+        : [];
+      const primaryId = typeof raw?.primaryId === "string" && accounts.some((entry) => entry.id === raw.primaryId)
+        ? raw.primaryId
+        : accounts[0]?.id ?? null;
+      return { primaryId, accounts };
+    } catch {
+      return { primaryId: null, accounts: [] };
+    }
+  };
+
+  const writeSpotifyState = (state: { primaryId: string | null; accounts: StoredSpotifyAccount[] }): void => {
+    fs.writeFileSync(
+      spotifyFilePath,
       JSON.stringify(state, null, 2),
       { encoding: "utf-8", mode: 0o600 },
     );
@@ -306,6 +374,55 @@ export function createCookieStore(cookieDir: string): CookieStore {
       }
       const accounts = state.accounts.filter((entry) => entry.id !== accountId);
       writeQQState({
+        primaryId: state.primaryId === accountId ? (accounts[0]?.id ?? null) : state.primaryId,
+        accounts,
+      });
+      return true;
+    },
+
+    saveSpotifyAccount(
+      account: Omit<StoredSpotifyAccount, "id" | "updatedAt">,
+      makePrimary = true,
+    ): StoredSpotifyAccount {
+      const state = readSpotifyState();
+      const nextAccount: StoredSpotifyAccount = {
+        ...account,
+        id: `spotify:${account.userId}`,
+        updatedAt: new Date().toISOString(),
+      };
+      const nextAccounts = state.accounts.filter((entry) => entry.id !== nextAccount.id);
+      nextAccounts.push(nextAccount);
+      writeSpotifyState({
+        primaryId: makePrimary || !state.primaryId ? nextAccount.id : state.primaryId,
+        accounts: nextAccounts,
+      });
+      return nextAccount;
+    },
+
+    loadSpotifyAccounts(): StoredSpotifyAccount[] {
+      return readSpotifyState().accounts;
+    },
+
+    getSpotifyPrimaryId(): string | null {
+      return readSpotifyState().primaryId;
+    },
+
+    setSpotifyPrimary(accountId: string): boolean {
+      const state = readSpotifyState();
+      if (!state.accounts.some((entry) => entry.id === accountId)) {
+        return false;
+      }
+      writeSpotifyState({ ...state, primaryId: accountId });
+      return true;
+    },
+
+    removeSpotifyAccount(accountId: string): boolean {
+      const state = readSpotifyState();
+      if (!state.accounts.some((entry) => entry.id === accountId)) {
+        return false;
+      }
+      const accounts = state.accounts.filter((entry) => entry.id !== accountId);
+      writeSpotifyState({
         primaryId: state.primaryId === accountId ? (accounts[0]?.id ?? null) : state.primaryId,
         accounts,
       });

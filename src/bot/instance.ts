@@ -8,6 +8,8 @@ import {
 import { AudioPlayer } from "../audio/player.js";
 import { PlayQueue, PlayMode, type QueuedSong } from "../audio/queue.js";
 import type { MusicProvider } from "../music/provider.js";
+import type { SpotifyProvider } from "../music/spotify.js";
+import { SpotifyPlaybackEngine } from "../music/spotify-playback.js";
 import {
   parseCommand,
   isAdminCommand,
@@ -74,6 +76,8 @@ export interface BotInstanceOptions {
   qqProvider: MusicProvider;
   bilibiliProvider: MusicProvider;
   youtubeProvider: MusicProvider;
+  spotifyProvider?: SpotifyProvider;
+  spotifyCacheDir?: string;
   database: BotDatabase;
   config: BotConfig;
   logger: Logger;
@@ -104,6 +108,8 @@ export class BotInstance extends EventEmitter {
   private qqProvider: MusicProvider;
   private bilibiliProvider: MusicProvider;
   private youtubeProvider: MusicProvider;
+  private spotifyProvider: SpotifyProvider | null = null;
+  private spotifyPlayback: SpotifyPlaybackEngine | null = null;
   private database: BotDatabase;
   private config: BotConfig;
   private logger: Logger;
@@ -127,6 +133,7 @@ export class BotInstance extends EventEmitter {
     this.qqProvider = options.qqProvider;
     this.bilibiliProvider = options.bilibiliProvider;
     this.youtubeProvider = options.youtubeProvider;
+    this.spotifyProvider = options.spotifyProvider ?? null;
     this.database = options.database;
     this.config = options.config;
     this.logger = options.logger.child({ botId: this.id });
@@ -136,6 +143,15 @@ export class BotInstance extends EventEmitter {
     this.player = new AudioPlayer(this.logger, {
       maxVolume: getConfiguredMaxVolume(this.config),
     });
+    if (this.spotifyProvider && options.spotifyCacheDir) {
+      this.spotifyPlayback = new SpotifyPlaybackEngine(
+        this.spotifyProvider,
+        this.config,
+        this.logger,
+        this.id,
+        options.spotifyCacheDir,
+      );
+    }
     this.syncDuckingConfig();
     this.queue = new PlayQueue();
 
@@ -188,6 +204,7 @@ export class BotInstance extends EventEmitter {
       this.lastVoicePacketAt = 0;
       this.player.setDuckingActive(false);
       this.player.stop();
+      this.spotifyPlayback?.shutdown();
       // Only emit externally once per lifecycle so clients don't see a
       // duplicate "disconnected" after an explicit disconnect() call.
       if (this.disconnectEmitted) return;
@@ -228,6 +245,7 @@ export class BotInstance extends EventEmitter {
     this.lastVoicePacketAt = 0;
     this.player.setDuckingActive(false);
     this.player.stop();
+    this.spotifyPlayback?.shutdown();
     this.connected = false;
     if (!this.disconnectEmitted) {
       this.disconnectEmitted = true;
@@ -477,17 +495,19 @@ export class BotInstance extends EventEmitter {
     }
   }
 
-  getProviderFor(platform: "netease" | "qq" | "bilibili" | "youtube"): MusicProvider {
+  getProviderFor(platform: "netease" | "qq" | "bilibili" | "youtube" | "spotify"): MusicProvider {
+    if (platform === "spotify" && this.spotifyProvider) return this.spotifyProvider;
     if (platform === "bilibili") return this.bilibiliProvider;
     if (platform === "youtube") return this.youtubeProvider;
     return platform === "qq" ? this.qqProvider : this.neteaseProvider;
   }
 
   private getProvider(flags: Set<string>): MusicProvider {
+    if (flags.has("s") && this.spotifyProvider) return this.spotifyProvider;
     if (flags.has("b")) return this.bilibiliProvider;
     if (flags.has("q")) return this.qqProvider;
     if (flags.has("y")) return this.youtubeProvider;
-    return this.neteaseProvider;
+    return this.spotifyProvider?.hasAccount() ? this.spotifyProvider : this.neteaseProvider;
   }
 
   /** Resolve URL for a song and start playing it. Skips to next if URL fails. */
@@ -502,6 +522,29 @@ export class BotInstance extends EventEmitter {
     this.voteSkipUsers.clear();
     const provider = this.getProviderFor(song.platform);
     try {
+      if (song.platform === "spotify") {
+        if (!this.spotifyPlayback || !this.spotifyProvider) {
+          throw new Error("Spotify playback is not configured");
+        }
+        await this.spotifyPlayback.play(song, this.player, () => {
+          this.logger.debug("Spotify track ended, advancing queue");
+          return this.playNext();
+        });
+        this.database.addPlayHistory({
+          botId: this.id,
+          songId: song.id,
+          songName: song.name,
+          artist: song.artist,
+          album: song.album,
+          platform: song.platform,
+          coverUrl: song.coverUrl,
+        });
+        this.profileManager.onSongChange(song).catch((err) => {
+          this.logger.warn({ err }, "Profile update failed after Spotify song change");
+        });
+        this.emit("stateChange");
+        return true;
+      }
       const url = await provider.getSongUrl(song.id, undefined, song);
       if (!url) {
         this.logger.warn({ songId: song.id, name: song.name }, "No URL available, skipping");
@@ -589,12 +632,22 @@ export class BotInstance extends EventEmitter {
 
   private cmdPause(): string {
     this.player.pause();
+    if (this.queue.current()?.platform === "spotify") {
+      this.spotifyPlayback?.pause().catch((err) => {
+        this.logger.warn({ err }, "Failed to pause Spotify playback");
+      });
+    }
     this.emit("stateChange");
     return "Paused";
   }
 
   private cmdResume(): string {
     this.player.resume();
+    if (this.queue.current()?.platform === "spotify") {
+      this.spotifyPlayback?.resume().catch((err) => {
+        this.logger.warn({ err }, "Failed to resume Spotify playback");
+      });
+    }
     this.emit("stateChange");
     return "Resumed";
   }
@@ -850,6 +903,7 @@ export class BotInstance extends EventEmitter {
       `${p}play -q <song> — Search from QQ Music`,
       `${p}play -b <song> — Search from BiliBili`,
       `${p}play -y <song> — Search from YouTube (yt-dlp)`,
+      `${p}play -s <song> — Search from Spotify`,
       `${p}add <song>   — Add to queue`,
       `${p}pause/resume — Pause/resume`,
       `${p}next/prev    — Next/previous`,
@@ -931,6 +985,18 @@ export class BotInstance extends EventEmitter {
 
   getPlayer(): AudioPlayer {
     return this.player;
+  }
+
+  async seek(seconds: number): Promise<void> {
+    const current = this.queue.current();
+    if (current?.platform === "spotify") {
+      await this.spotifyPlayback?.seek(seconds);
+      this.player.markSeek(seconds);
+      this.emit("stateChange");
+      return;
+    }
+    this.player.seek(seconds);
+    this.emit("stateChange");
   }
 
   getQueueManager(): PlayQueue {

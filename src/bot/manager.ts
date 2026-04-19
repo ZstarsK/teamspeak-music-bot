@@ -5,6 +5,7 @@ import {
   type BotInstanceOptions,
 } from "./instance.js";
 import type { MusicProvider } from "../music/provider.js";
+import type { SpotifyProvider } from "../music/spotify.js";
 import { YouTubeProvider } from "../music/youtube.js";
 import type { BotDatabase } from "../data/database.js";
 import { getDefaultDuckingSettings, type BotConfig, type DuckingSettings } from "../data/config.js";
@@ -74,6 +75,8 @@ export class BotManager extends EventEmitter {
   private qqProvider: MusicProvider;
   private bilibiliProvider: MusicProvider;
   private youtubeProvider: MusicProvider;
+  private spotifyProvider: SpotifyProvider | null;
+  private spotifyCacheDir: string | undefined;
   private database: BotDatabase;
   private config: BotConfig;
   private logger: Logger;
@@ -85,12 +88,16 @@ export class BotManager extends EventEmitter {
     database: BotDatabase,
     config: BotConfig,
     logger: Logger,
+    spotifyProvider?: SpotifyProvider,
+    spotifyCacheDir?: string,
   ) {
     super();
     this.neteaseProvider = neteaseProvider;
     this.qqProvider = qqProvider;
     this.bilibiliProvider = bilibiliProvider;
     this.youtubeProvider = new YouTubeProvider();
+    this.spotifyProvider = spotifyProvider ?? null;
+    this.spotifyCacheDir = spotifyCacheDir;
     this.database = database;
     this.config = config;
     this.logger = logger;
@@ -123,6 +130,8 @@ export class BotManager extends EventEmitter {
       qqProvider: this.qqProvider,
       bilibiliProvider: this.bilibiliProvider,
       youtubeProvider: this.youtubeProvider,
+      ...(this.spotifyProvider ? { spotifyProvider: this.spotifyProvider } : {}),
+      ...(this.spotifyCacheDir ? { spotifyCacheDir: this.spotifyCacheDir } : {}),
       database: this.database,
       config: this.config,
       logger: this.logger,
@@ -262,7 +271,9 @@ export class BotManager extends EventEmitter {
         neteaseProvider: this.neteaseProvider,
         qqProvider: this.qqProvider,
         bilibiliProvider: this.bilibiliProvider,
-      youtubeProvider: this.youtubeProvider,
+        youtubeProvider: this.youtubeProvider,
+        ...(this.spotifyProvider ? { spotifyProvider: this.spotifyProvider } : {}),
+        ...(this.spotifyCacheDir ? { spotifyCacheDir: this.spotifyCacheDir } : {}),
         database: this.database,
         config: this.config,
         logger: this.logger,
@@ -317,7 +328,9 @@ export class BotManager extends EventEmitter {
         neteaseProvider: this.neteaseProvider,
         qqProvider: this.qqProvider,
         bilibiliProvider: this.bilibiliProvider,
-      youtubeProvider: this.youtubeProvider,
+        youtubeProvider: this.youtubeProvider,
+        ...(this.spotifyProvider ? { spotifyProvider: this.spotifyProvider } : {}),
+        ...(this.spotifyCacheDir ? { spotifyCacheDir: this.spotifyCacheDir } : {}),
         database: this.database,
         config: this.config,
         logger: this.logger,
