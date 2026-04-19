@@ -37,7 +37,7 @@ describe("BotProfileManager", () => {
     expect((manager as any).buildNickname(song)).toBe("♪ 富士山下");
   });
 
-  it("truncates long song names without appending the default bot nickname", () => {
+  it("caps the nickname at 30 characters without appending ellipsis or bot name", () => {
     const manager = new BotProfileManager({} as any, logger, profileConfig, "MusicBot");
     const song: QueuedSong = {
       id: "1",
@@ -52,5 +52,8 @@ describe("BotProfileManager", () => {
     const nickname = (manager as any).buildNickname(song) as string;
     expect(nickname.startsWith("♪ ")).toBe(true);
     expect(nickname.includes("MusicBot")).toBe(false);
+    expect(nickname.includes("…")).toBe(false);
+    expect(Array.from(nickname)).toHaveLength(30);
+    expect(nickname).toBe("♪ 1234567890123456789012345678");
   });
 });

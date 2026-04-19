@@ -293,8 +293,9 @@ export class BotProfileManager {
 
   /**
    * Build a nickname string that fits within TS3_NICKNAME_MAX.
-   * Uses UTF-8 byte length for the limit since TS3 counts bytes,
-   * not characters.
+   * TeamSpeak accepts up to 30 nickname characters. Keep the playing
+   * prefix and preserve as much of the song name as possible without
+   * adding an ellipsis.
    */
   private buildNickname(song: QueuedSong): string | null {
     const songInfo = song.name.trim();
@@ -303,32 +304,10 @@ export class BotProfileManager {
       return null;
     }
 
-    const maxSongBytes = TS3_NICKNAME_MAX - Buffer.byteLength(prefix, "utf8");
-    const truncated = this.truncateUtf8(songInfo, maxSongBytes);
+    const prefixChars = Array.from(prefix).length;
+    const maxSongChars = Math.max(0, TS3_NICKNAME_MAX - prefixChars);
+    const truncated = Array.from(songInfo).slice(0, maxSongChars).join("");
     return `${prefix}${truncated}`;
-  }
-
-  /**
-   * Truncate a string so its UTF-8 byte length does not exceed maxBytes.
-   * Appends an ellipsis if truncation occurred, taking its byte cost
-   * into account. Never splits a multi-byte character.
-   */
-  private truncateUtf8(str: string, maxBytes: number): string {
-    if (Buffer.byteLength(str, "utf8") <= maxBytes) return str;
-    const ellipsis = "\u2026"; // …
-    const ellipsisBytes = Buffer.byteLength(ellipsis, "utf8"); // 3
-    const target = maxBytes - ellipsisBytes;
-    if (target <= 0) return ellipsis;
-    // Walk characters, accumulating byte length
-    let byteLen = 0;
-    let end = 0;
-    for (const ch of str) {
-      const chBytes = Buffer.byteLength(ch, "utf8");
-      if (byteLen + chBytes > target) break;
-      byteLen += chBytes;
-      end += ch.length; // ch.length handles surrogate pairs
-    }
-    return str.slice(0, end) + ellipsis;
   }
 
   private async updateChannelDescription(song: QueuedSong | null): Promise<void> {
