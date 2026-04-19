@@ -60,6 +60,73 @@ export interface TS3TextMessage {
   targetMode: number; // 1=private, 2=channel, 3=server
 }
 
+export interface TS3VoiceData {
+  clientId: number;
+  codec: number;
+  data: Uint8Array;
+}
+
+const CHANNEL_JOIN_RETRY_DELAYS_MS = [0, 400, 1200];
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function normalizeChannelLookupName(name: string): string {
+  return name.trim().replace(/\s+/g, " ");
+}
+
+function buildChannelPath(
+  channels: Array<{ id: bigint; parentID: bigint; name: string }>,
+  channelId: bigint,
+): string {
+  const byId = new Map(channels.map((channel) => [channel.id, channel]));
+  const parts: string[] = [];
+  let current = byId.get(channelId);
+  const seen = new Set<bigint>();
+
+  while (current && !seen.has(current.id)) {
+    seen.add(current.id);
+    parts.unshift(current.name);
+    if (current.parentID === 0n) break;
+    current = byId.get(current.parentID);
+  }
+
+  return parts.join("/");
+}
+
+export function findChannelByName(
+  channels: Array<{ id: bigint; parentID: bigint; name: string }>,
+  requestedName: string,
+): { id: bigint; parentID: bigint; name: string } | null {
+  const requested = normalizeChannelLookupName(requestedName);
+  if (!requested) return null;
+
+  const requestedLower = requested.toLocaleLowerCase();
+  const entries = channels.map((channel) => {
+    const normalizedName = normalizeChannelLookupName(channel.name);
+    const normalizedPath = normalizeChannelLookupName(
+      buildChannelPath(channels, channel.id),
+    );
+    return {
+      channel,
+      normalizedName,
+      normalizedPath,
+      normalizedNameLower: normalizedName.toLocaleLowerCase(),
+      normalizedPathLower: normalizedPath.toLocaleLowerCase(),
+    };
+  });
+
+  return (
+    entries.find(({ channel }) => channel.name === requestedName)?.channel ??
+    entries.find(({ normalizedName }) => normalizedName === requested)?.channel ??
+    entries.find(({ normalizedPath }) => normalizedPath === requested)?.channel ??
+    entries.find(({ normalizedNameLower }) => normalizedNameLower === requestedLower)?.channel ??
+    entries.find(({ normalizedPathLower }) => normalizedPathLower === requestedLower)?.channel ??
+    null
+  );
+}
+
 export class TS3Client extends EventEmitter {
   private client: TS3FullClient | null = null;
   private identity: Identity;
@@ -191,6 +258,8 @@ export class TS3Client extends EventEmitter {
       // Forward server password to the protocol library so it can be
       // included in clientinit for password-protected servers
       serverPassword: this.options.serverPassword,
+      defaultChannel: this.options.defaultChannel,
+      defaultChannelPassword: this.options.channelPassword,
       logger: {
         debug: (msg) => this.logger.debug(msg),
         info: (msg) => this.logger.info(msg),
@@ -223,6 +292,10 @@ export class TS3Client extends EventEmitter {
       );
     });
 
+    this.client.on("voiceData", (packet: TS3VoiceData) => {
+      this.emit("voiceData", packet);
+    });
+
     await this.client.connect();
     // Note: @honeybbq/teamspeak-client 0.2.x ships a universal clientinit
     // (client_version "3.?.? [Build: 5680278000]" + matching signature)
@@ -252,28 +325,62 @@ export class TS3Client extends EventEmitter {
   async joinChannel(channelName: string, password?: string): Promise<void> {
     if (!this.client) return;
 
-    try {
-      const channels = await listChannels(this.client);
-      const channel = channels.find((ch) => ch.name === channelName);
+    const requestedName = normalizeChannelLookupName(channelName);
+    if (!requestedName) return;
 
-      if (!channel) {
-        this.logger.warn({ channelName }, "Channel not found");
+    let lastError: unknown;
+
+    for (let attempt = 0; attempt < CHANNEL_JOIN_RETRY_DELAYS_MS.length; attempt++) {
+      try {
+        const delay = CHANNEL_JOIN_RETRY_DELAYS_MS[attempt]!;
+        if (delay > 0) {
+          await sleep(delay);
+        }
+
+        const channels = await listChannels(this.client);
+        const channel = findChannelByName(channels, requestedName);
+
+        if (!channel) {
+          this.logger.warn(
+            {
+              channelName: requestedName,
+              attempt: attempt + 1,
+              knownChannels: channels.slice(0, 10).map((ch) => ch.name),
+            },
+            "Channel not found while trying to join default channel",
+          );
+          continue;
+        }
+
+        if (this.client.channelID() === channel.id) {
+          this.logger.info(
+            { channelName: requestedName, cid: channel.id.toString() },
+            "Already in default channel",
+          );
+          return;
+        }
+
+        await clientMove(
+          this.client,
+          this.clientId,
+          channel.id,
+          password
+        );
+        this.logger.info(
+          { channelName: requestedName, cid: channel.id.toString(), attempt: attempt + 1 },
+          "Joined channel"
+        );
         return;
+      } catch (err) {
+        lastError = err;
+        this.logger.warn(
+          { err, channelName: requestedName, attempt: attempt + 1 },
+          "Failed to join channel, will retry if attempts remain",
+        );
       }
-
-      await clientMove(
-        this.client,
-        this.clientId,
-        channel.id,
-        password
-      );
-      this.logger.info(
-        { channelName, cid: channel.id.toString() },
-        "Joined channel"
-      );
-    } catch (err) {
-      this.logger.error({ err, channelName }, "Failed to join channel");
     }
+
+    this.logger.error({ err: lastError, channelName: requestedName }, "Failed to join channel");
   }
 
   async sendTextMessage(

@@ -22,7 +22,7 @@ const profileConfig = {
 };
 
 describe("BotProfileManager", () => {
-  it("uses only the music note and song name while playing", () => {
+  it("uses the music note, song name, and artist while playing", () => {
     const manager = new BotProfileManager({} as any, logger, profileConfig, "MusicBot");
     const song: QueuedSong = {
       id: "1",
@@ -34,15 +34,15 @@ describe("BotProfileManager", () => {
       platform: "netease",
     };
 
-    expect((manager as any).buildNickname(song)).toBe("♪ 富士山下");
+    expect((manager as any).buildNickname(song)).toBe("♪ 富士山下-陈奕迅");
   });
 
   it("caps the nickname at 30 characters without appending ellipsis or bot name", () => {
     const manager = new BotProfileManager({} as any, logger, profileConfig, "MusicBot");
     const song: QueuedSong = {
       id: "1",
-      name: "1234567890123456789012345678901234567890",
-      artist: "Artist",
+      name: "1234567890123456789012345678",
+      artist: "ABCDEFGHIJ",
       album: "Album",
       duration: 200,
       coverUrl: "",
@@ -55,5 +55,20 @@ describe("BotProfileManager", () => {
     expect(nickname.includes("…")).toBe(false);
     expect(Array.from(nickname)).toHaveLength(30);
     expect(nickname).toBe("♪ 1234567890123456789012345678");
+  });
+
+  it("uses remaining nickname space for the artist", () => {
+    const manager = new BotProfileManager({} as any, logger, profileConfig, "MusicBot");
+    const song: QueuedSong = {
+      id: "1",
+      name: "12345678901234567890",
+      artist: "ABCDEFGHIJKLMN",
+      album: "Album",
+      duration: 200,
+      coverUrl: "",
+      platform: "netease",
+    };
+
+    expect((manager as any).buildNickname(song)).toBe("♪ 12345678901234567890-ABCDEFG");
   });
 });

@@ -3,6 +3,7 @@ import {
   TS3Client,
   type TS3ClientOptions,
   type TS3TextMessage,
+  type TS3VoiceData,
 } from "../ts-protocol/client.js";
 import { AudioPlayer } from "../audio/player.js";
 import { PlayQueue, PlayMode, type QueuedSong } from "../audio/queue.js";
@@ -13,11 +14,13 @@ import {
   type ParsedCommand,
 } from "./commands.js";
 import type { Logger } from "../logger.js";
-
-const MAX_VOLUME = 20;
 import type { BotDatabase, ProfileConfig } from "../data/database.js";
 import type { BotConfig } from "../data/config.js";
 import { BotProfileManager } from "./profile.js";
+
+const MAX_VOLUME = 20;
+const DUCKING_RELEASE_MS = 450;
+const DUCKING_POLL_INTERVAL_MS = 100;
 
 export interface BotInstanceOptions {
   id: string;
@@ -66,6 +69,8 @@ export class BotInstance extends EventEmitter {
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
   private channelUserCount = 0;
   private profileManager: BotProfileManager;
+  private duckingTimer: ReturnType<typeof setInterval> | null = null;
+  private lastVoicePacketAt = 0;
 
   constructor(options: BotInstanceOptions) {
     super();
@@ -128,6 +133,9 @@ export class BotInstance extends EventEmitter {
       // this.connected was never flipped to true. Previously this handler
       // short-circuited on !this.connected, leaving player stuck as "playing".
       this.connected = false;
+      this.stopDuckingMonitor();
+      this.lastVoicePacketAt = 0;
+      this.player.setDuckingActive(false);
       this.player.stop();
       // Only emit externally once per lifecycle so clients don't see a
       // duplicate "disconnected" after an explicit disconnect() call.
@@ -138,6 +146,13 @@ export class BotInstance extends EventEmitter {
 
     this.tsClient.on("connected", () => {
       this._startIdlePoller();
+      this.startDuckingMonitor();
+      this.lastVoicePacketAt = 0;
+      this.player.setDuckingActive(false);
+    });
+
+    this.tsClient.on("voiceData", (_packet: TS3VoiceData) => {
+      this.lastVoicePacketAt = Date.now();
     });
   }
 
@@ -158,6 +173,9 @@ export class BotInstance extends EventEmitter {
 
   disconnect(): void {
     this._cancelIdleTimer();
+    this.stopDuckingMonitor();
+    this.lastVoicePacketAt = 0;
+    this.player.setDuckingActive(false);
     this.player.stop();
     this.connected = false;
     if (!this.disconnectEmitted) {
@@ -207,6 +225,21 @@ export class BotInstance extends EventEmitter {
       clearTimeout(this.idleTimer);
       this.idleTimer = null;
     }
+  }
+
+  private startDuckingMonitor(): void {
+    if (this.duckingTimer) return;
+    this.duckingTimer = setInterval(() => {
+      if (!this.connected) return;
+      const active = Date.now() - this.lastVoicePacketAt < DUCKING_RELEASE_MS;
+      this.player.setDuckingActive(active);
+    }, DUCKING_POLL_INTERVAL_MS);
+  }
+
+  private stopDuckingMonitor(): void {
+    if (!this.duckingTimer) return;
+    clearInterval(this.duckingTimer);
+    this.duckingTimer = null;
   }
 
   private async handleTextMessage(msg: TS3TextMessage): Promise<void> {

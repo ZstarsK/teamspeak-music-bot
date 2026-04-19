@@ -293,21 +293,37 @@ export class BotProfileManager {
 
   /**
    * Build a nickname string that fits within TS3_NICKNAME_MAX.
-   * TeamSpeak accepts up to 30 nickname characters. Keep the playing
-   * prefix and preserve as much of the song name as possible without
+   * TeamSpeak accepts up to 30 nickname characters. Prefer keeping the
+   * full song name, then use any remaining space for the artist without
    * adding an ellipsis.
    */
   private buildNickname(song: QueuedSong): string | null {
-    const songInfo = song.name.trim();
+    const songName = song.name.trim();
+    const artistName = song.artist.trim();
     const prefix = "\u266A "; // ♪
-    if (!songInfo) {
+    if (!songName) {
       return null;
     }
 
     const prefixChars = Array.from(prefix).length;
-    const maxSongChars = Math.max(0, TS3_NICKNAME_MAX - prefixChars);
-    const truncated = Array.from(songInfo).slice(0, maxSongChars).join("");
-    return `${prefix}${truncated}`;
+    const maxBodyChars = Math.max(0, TS3_NICKNAME_MAX - prefixChars);
+    const fullBody = artistName ? `${songName}-${artistName}` : songName;
+    if (Array.from(fullBody).length <= maxBodyChars) {
+      return `${prefix}${fullBody}`;
+    }
+
+    const songChars = Array.from(songName);
+    if (songChars.length >= maxBodyChars || !artistName) {
+      return `${prefix}${songChars.slice(0, maxBodyChars).join("")}`;
+    }
+
+    const artistChars = Array.from(artistName);
+    const remainingArtistChars = Math.max(
+      0,
+      maxBodyChars - songChars.length - Array.from("-").length,
+    );
+    const truncatedArtist = artistChars.slice(0, remainingArtistChars).join("");
+    return `${prefix}${songName}-${truncatedArtist}`;
   }
 
   private async updateChannelDescription(song: QueuedSong | null): Promise<void> {

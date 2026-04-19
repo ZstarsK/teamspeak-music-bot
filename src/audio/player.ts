@@ -83,6 +83,9 @@ export type PlayerState = "idle" | "playing" | "paused";
 const FRAME_DURATION_MS = 20;
 const MAX_VOLUME = 20;
 const DEFAULT_VOLUME = 8;
+const DUCKING_GAIN = 0.35;
+const DUCKING_FADE_OUT_MS = 160;
+const DUCKING_FADE_IN_MS = 420;
 
 export class AudioPlayer extends EventEmitter {
   private ffmpeg: ChildProcess | null = null;
@@ -103,6 +106,8 @@ export class AudioPlayer extends EventEmitter {
   private spawnFailed = false; // true if ffmpeg spawn errored (prevent trackEnd cascade)
   private consecutiveFailures = 0;
   private static readonly MAX_CONSECUTIVE_FAILURES = 3;
+  private duckingActive = false;
+  private duckingFactor = 1;
 
   constructor(logger: Logger) {
     super();
@@ -295,8 +300,8 @@ export class AudioPlayer extends EventEmitter {
   }
 
   private applyVolume(pcm: Buffer): Buffer {
-    if (this.volume === 100) return Buffer.from(pcm);
-    const factor = this.volume / 100;
+    const factor = this.getVolumeFactor();
+    if (factor >= 0.999) return Buffer.from(pcm);
     const out = Buffer.alloc(pcm.length);
     for (let i = 0; i < pcm.length; i += 2) {
       let sample = pcm.readInt16LE(i);
@@ -306,6 +311,20 @@ export class AudioPlayer extends EventEmitter {
       out.writeInt16LE(sample, i);
     }
     return out;
+  }
+
+  private getVolumeFactor(): number {
+    const targetDuckingFactor = this.duckingActive ? DUCKING_GAIN : 1;
+    if (this.duckingFactor !== targetDuckingFactor) {
+      const fadeMs = this.duckingActive ? DUCKING_FADE_OUT_MS : DUCKING_FADE_IN_MS;
+      const maxStep = FRAME_DURATION_MS / fadeMs;
+      if (this.duckingFactor < targetDuckingFactor) {
+        this.duckingFactor = Math.min(targetDuckingFactor, this.duckingFactor + maxStep);
+      } else {
+        this.duckingFactor = Math.max(targetDuckingFactor, this.duckingFactor - maxStep);
+      }
+    }
+    return (this.volume / 100) * this.duckingFactor;
   }
 
   /** Actual elapsed time in seconds (ground truth from frame count) */
@@ -359,6 +378,7 @@ export class AudioPlayer extends EventEmitter {
     this.currentUrl = "";
     this.seekOffset = 0;
     this.framesPlayed = 0;
+    this.duckingFactor = 1;
   }
 
   /** Reset the consecutive failure counter (e.g. after user action) */
@@ -368,6 +388,10 @@ export class AudioPlayer extends EventEmitter {
 
   setVolume(vol: number): void {
     this.volume = Math.max(0, Math.min(MAX_VOLUME, vol));
+  }
+
+  setDuckingActive(active: boolean): void {
+    this.duckingActive = active;
   }
 
   getVolume(): number {
