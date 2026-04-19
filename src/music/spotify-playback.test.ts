@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { buildLibrespotArgs, getSpotifyLibrespotCachePaths } from "./spotify-playback.js";
+import {
+  buildLibrespotArgs,
+  getSpotifyLibrespotCachePaths,
+  shouldReuseSpotifyPcmStream,
+} from "./spotify-playback.js";
 
 describe("spotify librespot helpers", () => {
   it("builds sanitized account cache paths for credentials-cache mode", () => {
@@ -41,5 +45,12 @@ describe("spotify librespot helpers", () => {
     const index = args.indexOf("--access-token");
     expect(index).toBeGreaterThan(-1);
     expect(args[index + 1]).toBe("abc123");
+  });
+
+  it("reuses the existing PCM stream only while the same spotify process is already playing", () => {
+    expect(shouldReuseSpotifyPcmStream({ sameProcess: true, playerState: "playing" })).toBe(true);
+    expect(shouldReuseSpotifyPcmStream({ sameProcess: true, playerState: "paused" })).toBe(false);
+    expect(shouldReuseSpotifyPcmStream({ sameProcess: true, playerState: "idle" })).toBe(false);
+    expect(shouldReuseSpotifyPcmStream({ sameProcess: false, playerState: "playing" })).toBe(false);
   });
 });

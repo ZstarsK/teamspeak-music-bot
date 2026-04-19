@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import type { AudioPlayer } from "../audio/player.js";
+import type { AudioPlayer, PlayerState } from "../audio/player.js";
 import {
   getConfiguredSpotifyLibrespotAuthMode,
   type BotConfig,
@@ -12,7 +12,7 @@ import type { Song } from "./provider.js";
 import { SpotifyProvider, type SpotifyAccountRecord } from "./spotify.js";
 
 const DEVICE_WAIT_TIMEOUT_MS = 12_000;
-const DEVICE_WAIT_INTERVAL_MS = 750;
+const DEVICE_WAIT_INTERVAL_MS = 250;
 const EVENT_POLL_INTERVAL_MS = 350;
 
 function sleep(ms: number): Promise<void> {
@@ -75,6 +75,13 @@ export function buildLibrespotArgs(params: {
   return [...args, "--access-token", params.accessToken];
 }
 
+export function shouldReuseSpotifyPcmStream(params: {
+  sameProcess: boolean;
+  playerState: PlayerState;
+}): boolean {
+  return params.sameProcess && params.playerState === "playing";
+}
+
 function directoryHasFiles(dir: string): boolean {
   try {
     return fs.existsSync(dir) && fs.readdirSync(dir).length > 0;
@@ -121,24 +128,32 @@ export class SpotifyPlaybackEngine {
   async play(song: Song, player: AudioPlayer, onEnd: () => void | Promise<void>): Promise<void> {
     const account = await this.provider.getPlaybackAccount(song.accountId);
     const trackUri = this.provider.getTrackUri(song.id);
-    await this.ensureProcess(account, onEnd);
+    const sameProcess = await this.ensureProcess(account, onEnd);
     const deviceId = await this.waitForDevice(account.id);
     this.activeAccountId = account.id;
     this.activeDeviceId = deviceId;
     this.activeTrackUri = trackUri;
-    const pcmStream = this.librespot?.stdout;
-    if (!pcmStream) {
-      throw new Error("librespot PCM stdout is not available");
-    }
-    player.playPcmStream(pcmStream, {
-      inputSampleRate: 44100,
-      cleanup: () => {
-        if (!this.playbackStarted) return;
-        this.pause().catch((err) => {
-          this.logger.warn({ err }, "Failed to pause Spotify playback during cleanup");
-        });
-      },
+    const reusePcmStream = shouldReuseSpotifyPcmStream({
+      sameProcess,
+      playerState: player.getState(),
     });
+    if (!reusePcmStream) {
+      const pcmStream = this.librespot?.stdout;
+      if (!pcmStream) {
+        throw new Error("librespot PCM stdout is not available");
+      }
+      player.playPcmStream(pcmStream, {
+        inputSampleRate: 44100,
+        cleanup: () => {
+          if (!this.playbackStarted) return;
+          this.pause().catch((err) => {
+            this.logger.warn({ err }, "Failed to pause Spotify playback during cleanup");
+          });
+        },
+      });
+    } else {
+      this.logger.info({ deviceId, trackUri }, "Reusing existing Spotify PCM stream");
+    }
     try {
       await this.provider.startPlayback({
         accountId: account.id,
@@ -215,10 +230,10 @@ export class SpotifyPlaybackEngine {
   private async ensureProcess(
     account: SpotifyAccountRecord,
     onEnd: () => void | Promise<void>,
-  ): Promise<void> {
+  ): Promise<boolean> {
     if (this.librespot && !this.librespot.killed && this.activeAccountId === account.id) {
       this.startEventWatcher(onEnd);
-      return;
+      return true;
     }
     this.shutdown();
     this.ensureRuntimeFiles();
@@ -294,6 +309,7 @@ export class SpotifyPlaybackEngine {
     });
 
     this.startEventWatcher(onEnd);
+    return false;
   }
 
   private startEventWatcher(onEnd: () => void | Promise<void>): void {

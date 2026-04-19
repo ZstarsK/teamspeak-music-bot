@@ -16,10 +16,16 @@
           <div class="playlist-stats">
             {{ songs.length }} 首歌曲
           </div>
-          <button class="play-all-btn" @click="playAll">
-            <Icon icon="mdi:play" />
-            播放全部
-          </button>
+          <div class="playlist-actions">
+            <button class="play-all-btn" @click="playAll">
+              <Icon icon="mdi:play" />
+              播放全部
+            </button>
+            <button class="shuffle-btn" @click="playRandom" :disabled="songs.length === 0">
+              <Icon icon="mdi:shuffle-variant" />
+              随机播放
+            </button>
+          </div>
         </div>
       </div>
 
@@ -82,6 +88,15 @@ async function playAll() {
   const platform = (route.query.platform as string) || 'spotify';
   const accountId = route.query.accountId as string | undefined;
   await store.playPlaylist(id, platform, undefined, accountId);
+}
+
+async function playRandom() {
+  if (songs.value.length === 0) return;
+  const id = route.params.id as string;
+  const platform = (route.query.platform as string) || 'spotify';
+  const accountId = route.query.accountId as string | undefined;
+  const startIndex = Math.floor(Math.random() * songs.value.length);
+  await store.playPlaylist(id, platform, startIndex, accountId);
 }
 
 async function playSongAt(index: number) {
@@ -174,6 +189,43 @@ onMounted(async () => {
 
   &:hover { transform: scale(1.04); }
   &:active { transform: scale(0.96); }
+}
+
+.playlist-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.shuffle-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 20px;
+  background: transparent;
+  color: var(--text-primary);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: var(--radius-lg);
+  font-size: 14px;
+  font-weight: 600;
+  width: fit-content;
+  transition:
+    transform var(--transition-fast),
+    border-color var(--transition-fast),
+    opacity var(--transition-fast);
+
+  &:hover:not(:disabled) {
+    transform: scale(1.04);
+    border-color: rgba(255, 255, 255, 0.24);
+  }
+
+  &:active:not(:disabled) { transform: scale(0.96); }
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
 }
 
 .song-list {
