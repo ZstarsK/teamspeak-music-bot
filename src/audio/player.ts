@@ -120,6 +120,7 @@ export class AudioPlayer extends EventEmitter {
   private duckingConfig: DuckingSettings = getDefaultDuckingSettings();
   private readonly maxVolume: number;
   private cleanupCurrentSource: (() => void | Promise<void>) | null = null;
+  private discardingAudio = false;
 
   constructor(logger: Logger, options: AudioPlayerOptions = {}) {
     super();
@@ -353,6 +354,10 @@ export class AudioPlayer extends EventEmitter {
         if (noDataTimer) clearTimeout(noDataTimer);
         this.logger.info({ bytes: chunk.length }, "FFmpeg: first PCM data received");
       }
+      if (this.discardingAudio) {
+        this.discardPcmChunk(chunk);
+        return;
+      }
       this.pcmBuffer = Buffer.concat([this.pcmBuffer, chunk]);
       // Backpressure: pause FFmpeg stdout when buffer is too large
       if (this.pcmBuffer.length > AudioPlayer.BUFFER_HIGH_WATER && !this.ffmpegPaused && this.ffmpeg?.stdout) {
@@ -545,6 +550,33 @@ export class AudioPlayer extends EventEmitter {
     this.nextFrameTime = performance.now();
   }
 
+  private discardPcmChunk(chunk: Buffer): void {
+    const merged = this.pcmBuffer.length > 0
+      ? Buffer.concat([this.pcmBuffer, chunk])
+      : chunk;
+    const remainder = merged.length % PCM_SAMPLE_BLOCK_BYTES;
+    this.pcmBuffer = remainder === 0
+      ? Buffer.alloc(0)
+      : merged.subarray(merged.length - remainder);
+    if (this.ffmpegPaused && this.ffmpeg?.stdout) {
+      this.ffmpeg.stdout.resume();
+      this.ffmpegPaused = false;
+    }
+    this.nextFrameTime = performance.now();
+  }
+
+  setDiscardingAudio(discarding: boolean): void {
+    if (this.discardingAudio === discarding) return;
+    this.discardingAudio = discarding;
+    if (discarding) {
+      this.flushBufferedAudio();
+      this.logger.info("Discarding PCM output");
+    } else {
+      this.nextFrameTime = performance.now();
+      this.logger.info("Resuming PCM output");
+    }
+  }
+
   getSeekOffset(): number {
     return this.seekOffset;
   }
@@ -591,6 +623,7 @@ export class AudioPlayer extends EventEmitter {
     this.framesPlayed = 0;
     this.lastFrameAt = 0;
     this.duckingFactor = 1;
+    this.discardingAudio = false;
   }
 
   /** Reset the consecutive failure counter (e.g. after user action) */

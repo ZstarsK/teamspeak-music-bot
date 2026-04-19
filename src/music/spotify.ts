@@ -522,6 +522,25 @@ export class SpotifyProvider implements MusicProvider {
     });
   }
 
+  async getCurrentPlayback(accountId?: string): Promise<{
+    deviceId: string;
+    trackId: string;
+    progressMs: number;
+    isPlaying: boolean;
+  } | null> {
+    const data = await this.request<any>("/me/player", accountId, {
+      method: "GET",
+      validateStatus: (status: number) => status === 200 || status === 204,
+    });
+    if (!data || !data.item) return null;
+    return {
+      deviceId: String(data.device?.id ?? ""),
+      trackId: String(data.item?.id ?? ""),
+      progressMs: Number(data.progress_ms ?? 0) || 0,
+      isPlaying: Boolean(data.is_playing),
+    };
+  }
+
   async findDeviceIdByName(deviceName: string, accountId?: string): Promise<string | null> {
     const data = await this.request<any>("/me/player/devices", accountId);
     const devices = Array.isArray(data.devices) ? data.devices : [];

@@ -16,6 +16,10 @@ const DEVICE_WAIT_INTERVAL_MS = 250;
 const EVENT_POLL_INTERVAL_MS = 350;
 const PCM_SWITCH_QUIET_WINDOW_MS = 120;
 const PCM_SWITCH_TIMEOUT_MS = 1_500;
+const PCM_TARGET_WAIT_TIMEOUT_MS = 5_000;
+const PCM_TARGET_WAIT_INTERVAL_MS = 180;
+const PCM_TARGET_STABLE_MS = 360;
+const PCM_POST_TARGET_DISCARD_MS = 520;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -169,12 +173,10 @@ export class SpotifyPlaybackEngine {
       playerState,
       outputMode: this.currentOutputMode,
     }) && this.streamAttached && this.attachedPlayer === player;
+    const pcmReusingStream = reusingStream && this.currentOutputMode === "pcm";
     if (!reusingStream) {
       this.attachPlayerToStream(player);
-    } else if (this.currentOutputMode === "pcm") {
-      await this.withTransition(async () => {
-        await this.preparePcmBoundary(player, 0);
-      });
+    } else if (pcmReusingStream) {
       this.logger.info(
         { deviceId: this.activeDeviceId, fromTrackUri: this.activeTrackUri, toTrackUri: trackUri, playerState },
         "Reusing existing Spotify PCM stream",
@@ -194,21 +196,31 @@ export class SpotifyPlaybackEngine {
     this.activeTrackUri = trackUri;
     this.activeTrackId = song.id;
     try {
-      await this.withTransition(async () => {
+      if (pcmReusingStream) {
+        await this.withTransition(async () => {
+          await this.preparePcmBoundary(player, 0);
+          await this.provider.startPlayback({
+            accountId: account.id,
+            deviceId,
+            trackUri,
+          });
+          this.playbackStarted = true;
+          await this.waitForTargetPlayback(account.id, deviceId, song.id);
+          await this.releasePcmBoundary(player, 0);
+        });
+      } else {
         await this.provider.startPlayback({
           accountId: account.id,
           deviceId,
           trackUri,
         });
-      });
-      this.playbackStarted = true;
+        this.playbackStarted = true;
+      }
     } catch (err) {
       this.playbackStarted = false;
+      player.setDiscardingAudio(false);
       player.stop();
       throw err;
-    }
-    if (reusingStream && this.currentOutputMode === "pcm") {
-      player.resume();
     }
     this.logger.info({ trackUri, deviceId }, "Spotify playback started");
   }
@@ -235,8 +247,14 @@ export class SpotifyPlaybackEngine {
       await this.withTransition(async () => {
         await this.preparePcmBoundary(player, targetSeconds);
         await this.provider.seekPlayback(targetSeconds * 1000, this.activeAccountId!, this.activeDeviceId);
+        await this.waitForTargetPlayback(
+          this.activeAccountId!,
+          this.activeDeviceId,
+          this.activeTrackId ?? undefined,
+          targetSeconds * 1000,
+        );
+        await this.releasePcmBoundary(player, targetSeconds);
       });
-      player.resume();
       return;
     }
     await this.withTransition(async () => {
@@ -491,6 +509,7 @@ export class SpotifyPlaybackEngine {
       return;
     }
     player.pause();
+    player.setDiscardingAudio(true);
     await this.pauseForTransition();
     const deadline = Date.now() + PCM_SWITCH_TIMEOUT_MS;
     let zeroSince = 0;
@@ -511,6 +530,67 @@ export class SpotifyPlaybackEngine {
       { bufferedBytes: player.getBufferedAudioBytes(), nextElapsedSeconds },
       "Prepared PCM boundary for Spotify transition",
     );
+  }
+
+  private async releasePcmBoundary(player: AudioPlayer, nextElapsedSeconds: number): Promise<void> {
+    await this.discardPcmFor(player, PCM_POST_TARGET_DISCARD_MS);
+    player.flushBufferedAudio();
+    player.markSeek(nextElapsedSeconds);
+    player.setDiscardingAudio(false);
+    player.resume();
+    this.logger.info(
+      { bufferedBytes: player.getBufferedAudioBytes(), nextElapsedSeconds },
+      "Released PCM boundary after Spotify transition",
+    );
+  }
+
+  private async discardPcmFor(player: AudioPlayer, durationMs: number): Promise<void> {
+    const deadline = Date.now() + durationMs;
+    while (Date.now() < deadline) {
+      player.flushBufferedAudio();
+      await sleep(40);
+    }
+  }
+
+  private async waitForTargetPlayback(
+    accountId: string,
+    deviceId: string | null,
+    trackId?: string,
+    targetProgressMs?: number,
+  ): Promise<void> {
+    const deadline = Date.now() + PCM_TARGET_WAIT_TIMEOUT_MS;
+    let matchedSince = 0;
+    while (Date.now() < deadline) {
+      try {
+        const state = await this.provider.getCurrentPlayback(accountId);
+        const deviceMatches = !deviceId || !state?.deviceId || state.deviceId === deviceId;
+        const trackMatches = !trackId || state?.trackId === trackId;
+        const progressMatches = targetProgressMs === undefined
+          || Math.abs((state?.progressMs ?? 0) - targetProgressMs) < 8_000
+          || (state?.progressMs ?? 0) >= targetProgressMs;
+        if (state && deviceMatches && trackMatches && progressMatches) {
+          if (matchedSince === 0) matchedSince = Date.now();
+          if (Date.now() - matchedSince >= PCM_TARGET_STABLE_MS) {
+            this.logger.info(
+              {
+                deviceId: state.deviceId,
+                trackId: state.trackId,
+                progressMs: state.progressMs,
+                isPlaying: state.isPlaying,
+              },
+              "Spotify target playback confirmed",
+            );
+            return;
+          }
+        } else {
+          matchedSince = 0;
+        }
+      } catch (err) {
+        this.logger.debug({ err, trackId, targetProgressMs }, "Spotify target playback check failed");
+      }
+      await sleep(PCM_TARGET_WAIT_INTERVAL_MS);
+    }
+    this.logger.warn({ deviceId, trackId, targetProgressMs }, "Timed out waiting for Spotify target playback confirmation");
   }
 
   private async pauseForTransition(): Promise<void> {

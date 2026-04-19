@@ -82,4 +82,15 @@ describe("AudioPlayer ducking", () => {
     expect((player as any).pcmBuffer).toEqual(Buffer.from([5, 6, 7]));
     expect(player.getBufferedAudioBytes()).toBe(0);
   });
+
+  it("discards pcm output while preserving stream byte alignment", () => {
+    const player = new AudioPlayer(logger);
+    (player as any).pcmBuffer = Buffer.from([1, 2, 3]);
+
+    player.setDiscardingAudio(true);
+    (player as any).discardPcmChunk(Buffer.from([4, 5, 6, 7, 8, 9]));
+
+    expect((player as any).pcmBuffer).toEqual(Buffer.from([9]));
+    expect(player.getBufferedAudioBytes()).toBe(0);
+  });
 });
