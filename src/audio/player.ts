@@ -89,6 +89,7 @@ export type PlayerState = "idle" | "playing" | "paused";
 const FRAME_DURATION_MS = 20;
 const DEFAULT_VOLUME = 8;
 const DUCKING_FADE_OUT_MS = 160;
+const PCM_SAMPLE_BLOCK_BYTES = 4; // 16-bit stereo
 
 export interface AudioPlayerOptions {
   maxVolume?: number;
@@ -533,7 +534,10 @@ export class AudioPlayer extends EventEmitter {
   }
 
   flushBufferedAudio(): void {
-    this.pcmBuffer = Buffer.alloc(0);
+    const remainder = this.pcmBuffer.length % PCM_SAMPLE_BLOCK_BYTES;
+    this.pcmBuffer = remainder === 0
+      ? Buffer.alloc(0)
+      : this.pcmBuffer.subarray(this.pcmBuffer.length - remainder);
     if (this.ffmpegPaused && this.ffmpeg?.stdout) {
       this.ffmpeg.stdout.resume();
       this.ffmpegPaused = false;
@@ -546,7 +550,7 @@ export class AudioPlayer extends EventEmitter {
   }
 
   getBufferedAudioBytes(): number {
-    return this.pcmBuffer.length;
+    return this.pcmBuffer.length - (this.pcmBuffer.length % PCM_SAMPLE_BLOCK_BYTES);
   }
 
   pause(): void {

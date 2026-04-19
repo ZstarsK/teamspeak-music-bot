@@ -72,4 +72,14 @@ describe("AudioPlayer ducking", () => {
     player.setVolume(99);
     expect(player.getVolume()).toBe(12);
   });
+
+  it("flushes buffered pcm without breaking stereo sample alignment", () => {
+    const player = new AudioPlayer(logger);
+    (player as any).pcmBuffer = Buffer.from([1, 2, 3, 4, 5, 6, 7]);
+
+    player.flushBufferedAudio();
+
+    expect((player as any).pcmBuffer).toEqual(Buffer.from([5, 6, 7]));
+    expect(player.getBufferedAudioBytes()).toBe(0);
+  });
 });
