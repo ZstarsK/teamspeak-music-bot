@@ -1,5 +1,6 @@
 import { ref, onUnmounted } from 'vue';
 import { usePlayerStore } from '../stores/player.js';
+import { getWebSocketUrl } from '../lib/base.js';
 
 export function useWebSocket() {
   const connected = ref(false);
@@ -7,10 +8,7 @@ export function useWebSocket() {
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
   function connect() {
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const url = `${protocol}//${window.location.host}/ws`;
-
-    ws = new WebSocket(url);
+    ws = new WebSocket(getWebSocketUrl('/ws'));
 
     ws.onopen = () => {
       connected.value = true;

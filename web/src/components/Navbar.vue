@@ -85,6 +85,7 @@
 import { computed, ref, onMounted, onUnmounted, nextTick, reactive } from 'vue';
 import { Icon } from '@iconify/vue';
 import { usePlayerStore } from '../stores/player.js';
+import { withBasePath } from '../lib/base.js';
 
 const store = usePlayerStore();
 const activeBot = computed(() => store.activeBot);
@@ -140,7 +141,7 @@ async function tryClipboardWrite(text: string): Promise<boolean> {
 
 async function copyBotLink(id: string) {
   const bot = store.bots.find((b) => b.id === id);
-  const url = `${resolveBaseUrl()}/bot/${id}`;
+  const url = `${resolveBaseUrl()}${withBasePath(`/bot/${id}`)}`;
   linkDialog.url = url;
   linkDialog.name = bot?.name ?? '机器人';
   linkDialog.copied = false;
@@ -170,7 +171,7 @@ function closeLinkDialog() {
 
 async function loadPublicBaseUrl() {
   try {
-    const res = await fetch('/api/config/public-url');
+    const res = await fetch(withBasePath('/api/config/public-url'));
     if (!res.ok) return;
     const data = (await res.json()) as { publicUrl?: string | null };
     if (data.publicUrl) publicBaseUrl.value = data.publicUrl;

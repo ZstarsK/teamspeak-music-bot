@@ -255,4 +255,30 @@ export class QQMusicProvider implements MusicProvider {
       return { loggedIn: false };
     }
   }
+
+  async getUserPlaylists(): Promise<Playlist[]> {
+    if (!this.cookie) return [];
+    const uinMatch = /(?:^|; )uin=o?0?(\d+)/.exec(this.cookie);
+    const uin = uinMatch ? uinMatch[1] : "";
+    if (!uin) return [];
+
+    const res = await this.api.get("/user/getUserPlaylists", {
+      params: { uin, ...this.cookieParams },
+    });
+
+    const playlists = res.data?.response?.data?.playlists ?? [];
+    return playlists
+      .filter((p: any) => p?.isshow !== 0 && p?.dir_show !== 0)
+      .map((p: any) => {
+        const subtitle = String(p.subtitle ?? "");
+        const songCount = parseInt((/(\d+)首/.exec(subtitle)?.[1] ?? "0"), 10) || 0;
+        return {
+          id: String(p.dissid ?? p.tid ?? p.dirid),
+          name: p.title ?? p.dissname ?? "",
+          coverUrl: p.picurl ?? p.cover_url ?? "",
+          songCount,
+          platform: "qq",
+        } satisfies Playlist;
+      });
+  }
 }

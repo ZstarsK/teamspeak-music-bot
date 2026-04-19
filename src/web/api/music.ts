@@ -152,12 +152,23 @@ export function createMusicRouter(
 
   router.get("/user/playlists", async (req, res) => {
     try {
-      const provider = getProvider(req.query.platform as string);
-      if (!provider.getUserPlaylists) {
-        res.status(501).json({ error: "Not supported by this provider" });
+      const platform = req.query.platform as string | undefined;
+      if (platform) {
+        const provider = getProvider(platform);
+        if (!provider.getUserPlaylists) {
+          res.status(501).json({ error: "Not supported by this provider" });
+          return;
+        }
+        const playlists = await provider.getUserPlaylists();
+        res.json({ playlists });
         return;
       }
-      const playlists = await provider.getUserPlaylists();
+
+      const candidates = [neteaseProvider, qqProvider];
+      const results = await Promise.allSettled(
+        candidates.map((provider) => provider.getUserPlaylists ? provider.getUserPlaylists() : Promise.resolve([]))
+      );
+      const playlists = results.flatMap((r) => r.status === "fulfilled" ? r.value : []);
       res.json({ playlists });
     } catch (err) {
       logger.error({ err }, "Get user playlists failed");
