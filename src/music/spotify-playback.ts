@@ -531,6 +531,9 @@ export class SpotifyPlaybackEngine {
       const message = chunk.toString().trimEnd();
       if (message) this.logger.info({ librespot: message }, "librespot stderr");
     });
+    child.stdout?.on("error", (err) => {
+      this.logger.warn({ err }, "librespot stdout error");
+    });
 
     child.on("error", (err) => {
       this.logger.error({ err, bin }, "librespot failed to start");
@@ -752,10 +755,8 @@ export class SpotifyPlaybackEngine {
     await this.play(song, player, onEnd);
   }
 
-  private ensureEncodedGate(): OggSyncGate {
-    if (this.encodedGate) {
-      return this.encodedGate;
-    }
+  private createFreshEncodedGate(reason: string): OggSyncGate {
+    this.destroyEncodedGate();
     const stream = this.librespot?.stdout;
     if (!stream) {
       throw new Error("librespot stdout is not available");
@@ -765,12 +766,10 @@ export class SpotifyPlaybackEngine {
     gate.on("error", (err) => {
       this.logger.warn({ err }, "Spotify encoded gate error");
     });
-    stream.once("error", (err) => {
-      this.logger.warn({ err }, "librespot stdout error");
-    });
+    gate.syncToNextLogicalStream(reason);
     stream.pipe(gate);
     this.encodedGate = gate;
-    this.logger.info({ gateStats: gate.getStats() }, "Attached Spotify encoded Ogg gate");
+    this.logger.info({ reason, gateStats: gate.getStats() }, "Attached fresh Spotify encoded Ogg gate");
     return gate;
   }
 
@@ -779,8 +778,7 @@ export class SpotifyPlaybackEngine {
     cleanup = this.createPlaybackCleanup(),
     onSourceFailure?: (err: Error) => void | Promise<void>,
   ): void {
-    const gate = this.ensureEncodedGate();
-    gate.syncToNextLogicalStream("spotify-encoded-start");
+    const gate = this.createFreshEncodedGate("spotify-encoded-start");
     this.logger.info({ gateStats: gate.getStats() }, "Spotify encoded gate waiting for next Ogg stream");
     player.playEncodedStream(gate, {
       inputFormat: "ogg",
@@ -793,13 +791,13 @@ export class SpotifyPlaybackEngine {
   }
 
   private prepareEncodedBoundary(player: AudioPlayer): void {
-    const gate = this.ensureEncodedGate();
-    gate.syncToNextLogicalStream("spotify-encoded-transition");
+    const gateStats = this.encodedGate?.getStats() ?? null;
     player.stop({ skipCleanup: true });
+    this.destroyEncodedGate();
     this.attachedPlayer = null;
     this.streamAttached = false;
     this.logger.info(
-      { gateStats: gate.getStats(), activeTrackUri: this.activeTrackUri },
+      { gateStats, activeTrackUri: this.activeTrackUri },
       "Prepared encoded Ogg boundary for Spotify transition",
     );
   }
@@ -838,9 +836,6 @@ export class SpotifyPlaybackEngine {
     const gate = new PcmGate();
     gate.on("error", (err) => {
       this.logger.warn({ err }, "Spotify PCM gate error");
-    });
-    stream.once("error", (err) => {
-      this.logger.warn({ err }, "librespot stdout error");
     });
     stream.pipe(gate);
     this.pcmGate = gate;
