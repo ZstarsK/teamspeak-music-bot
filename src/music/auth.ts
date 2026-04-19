@@ -48,7 +48,7 @@ export function createCookieStore(cookieDir: string): CookieStore {
         };
         return { primaryId: account.id, accounts: [account] };
       }
-      const accounts = Array.isArray(raw?.accounts)
+      const accounts: StoredQQAccount[] = Array.isArray(raw?.accounts)
         ? raw.accounts
             .map((entry: any) => {
               const uin = typeof entry?.uin === "string" && entry.uin
@@ -65,9 +65,9 @@ export function createCookieStore(cookieDir: string): CookieStore {
                   : new Date().toISOString(),
               } satisfies StoredQQAccount;
             })
-            .filter((entry): entry is StoredQQAccount => entry !== null)
+            .filter((entry: StoredQQAccount | null): entry is StoredQQAccount => entry !== null)
         : [];
-      const primaryId = typeof raw?.primaryId === "string" && accounts.some((entry) => entry.id === raw.primaryId)
+      const primaryId = typeof raw?.primaryId === "string" && accounts.some((entry: StoredQQAccount) => entry.id === raw.primaryId)
         ? raw.primaryId
         : accounts[0]?.id ?? null;
       return { primaryId, accounts };

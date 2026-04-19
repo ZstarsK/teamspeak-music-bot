@@ -264,7 +264,7 @@ export class QQMusicProvider implements MusicProvider {
     //   success:  { isOk: true, message: '登录成功', session: { cookie, ... } }
     //   scanning: { isOk: false, refresh: false, message: '未扫描二维码' }
     //   expired:  { isOk: false, refresh: true,  message: '二维码已失效' }
-      const body = res.data;
+    const body = res.data;
     if (body?.isOk === true) {
       const cookie: string = body.session?.cookie ?? "";
       if (cookie) this.setCookie(cookie);
@@ -340,8 +340,9 @@ export class QQMusicProvider implements MusicProvider {
     const uin = uinMatch ? uinMatch[1] : "";
     if (!uin) return { loggedIn: false };
     try {
+      const resolvedAccountId = this.getResolvedAccountId() ?? undefined;
       const res = await this.api.get("/user/getUserPlaylists", {
-        params: { uin, ...this.getCookieParams(this.getResolvedAccountId()) },
+        params: { uin, ...this.getCookieParams(resolvedAccountId) },
       });
       if (res.data?.response?.code !== 0) return { loggedIn: false };
       return {

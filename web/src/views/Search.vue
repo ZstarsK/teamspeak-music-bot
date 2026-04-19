@@ -12,7 +12,7 @@
           v-model="query"
           class="search-input"
           placeholder="搜索歌曲、歌手、专辑..."
-          @keyup.enter="doSearch"
+          @keyup.enter="onSearchEnter"
           autofocus
         />
       </div>
@@ -120,6 +120,10 @@ async function doSearch(platform: SearchPlatform = activePlatform.value) {
   } finally {
     loading.value = false;
   }
+}
+
+function onSearchEnter() {
+  void doSearch();
 }
 
 async function switchPlatform(platform: SearchPlatform) {

@@ -2,6 +2,45 @@ import { describe, expect, it } from "vitest";
 import { QQMusicProvider } from "./qq.js";
 
 describe("QQ Music adapter", () => {
+  it("maps search results from current QQ search payload shape", async () => {
+    const provider = new QQMusicProvider("http://example.test");
+    (provider as any).api = {
+      get: async () => ({
+        data: {
+          data: {
+            song: {
+              list: [
+                {
+                  mid: "0012g3Et1iFQCC",
+                  name: "晴天",
+                  interval: 269,
+                  singer: [{ name: "周杰伦" }],
+                  album: { mid: "001Q4q2X1Gz4Wk", name: "叶惠美" },
+                  file: { media_mid: "004Z8Ihr0JIu5s" },
+                },
+              ],
+            },
+          },
+        },
+      }),
+    };
+
+    const result = await provider.search("晴天");
+
+    expect(result.songs).toEqual([
+      {
+        id: "0012g3Et1iFQCC",
+        name: "晴天",
+        artist: "周杰伦",
+        album: "叶惠美",
+        duration: 269,
+        coverUrl: "https://y.gtimg.cn/music/photo_new/T002R300x300M000001Q4q2X1Gz4Wk.jpg",
+        platform: "qq",
+        mediaId: "004Z8Ihr0JIu5s",
+      },
+    ]);
+  });
+
   it("maps playlist songs from current QQ songlist shape", async () => {
     const provider = new QQMusicProvider("http://example.test");
     (provider as any).api = {
