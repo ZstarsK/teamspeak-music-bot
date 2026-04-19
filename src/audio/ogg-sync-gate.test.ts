@@ -7,13 +7,42 @@ function collect(gate: OggSyncGate): Buffer[] {
   return chunks;
 }
 
+const OGG_CRC_TABLE = (() => {
+  const table = new Uint32Array(256);
+  for (let i = 0; i < table.length; i++) {
+    let value = i << 24;
+    for (let bit = 0; bit < 8; bit++) {
+      value = (value & 0x80000000) !== 0
+        ? ((value << 1) ^ 0x04c11db7)
+        : value << 1;
+    }
+    table[i] = value >>> 0;
+  }
+  return table;
+})();
+
+function calculateOggCrc(page: Buffer): number {
+  let crc = 0;
+  for (let i = 0; i < page.length; i++) {
+    const byte = i >= 22 && i < 26 ? 0 : page[i];
+    crc = ((crc << 8) ^ OGG_CRC_TABLE[((crc >>> 24) & 0xff) ^ byte]) >>> 0;
+  }
+  return crc >>> 0;
+}
+
 function oggPage(headerType: number, payload: number[]): Buffer {
-  return Buffer.from([
-    0x4f, 0x67, 0x67, 0x53, // OggS
-    0x00,
-    headerType,
-    ...payload,
-  ]);
+  if (payload.length > 255) throw new Error("test helper only supports one Ogg segment");
+  const body = Buffer.from(payload);
+  const page = Buffer.alloc(28 + body.length);
+  page.write("OggS", 0, "ascii");
+  page[4] = 0;
+  page[5] = headerType;
+  page.writeUInt32LE(0x12345678, 14);
+  page[26] = 1;
+  page[27] = body.length;
+  body.copy(page, 28);
+  page.writeUInt32LE(calculateOggCrc(page), 22);
+  return page;
 }
 
 describe("OggSyncGate", () => {
@@ -23,13 +52,14 @@ describe("OggSyncGate", () => {
 
     gate.beginDiscard("test");
     gate.write(Buffer.from([1, 2, 3, 4]));
-    gate.write(oggPage(0x02, [5, 6, 7]));
+    const page = oggPage(0x02, [5, 6, 7]);
+    gate.write(page);
 
     expect(chunks).toEqual([]);
     expect(gate.getStats()).toMatchObject({
-      inputBytes: 13,
+      inputBytes: 4 + page.length,
       outputBytes: 0,
-      discardedBytes: 13,
+      discardedBytes: 4 + page.length,
       mode: "discard",
     });
   });
@@ -48,7 +78,7 @@ describe("OggSyncGate", () => {
 
     expect(Buffer.concat(chunks)).toEqual(oggPage(0x02, [9, 10, 11]));
     expect(gate.getStats()).toMatchObject({
-      outputBytes: 9,
+      outputBytes: oggPage(0x02, [9, 10, 11]).length,
       mode: "passthrough",
       syncHits: 1,
     });
@@ -60,11 +90,30 @@ describe("OggSyncGate", () => {
 
     gate.syncToNextLogicalStream("split");
     gate.write(Buffer.from([1, 2, 0x4f, 0x67]));
-    gate.write(Buffer.from([0x67, 0x53, 0x00, 0x02, 9, 10]));
+    gate.write(oggPage(0x02, [9, 10]).subarray(2));
 
     expect(Buffer.concat(chunks)).toEqual(oggPage(0x02, [9, 10]));
     expect(gate.getStats()).toMatchObject({
-      outputBytes: 8,
+      outputBytes: oggPage(0x02, [9, 10]).length,
+      mode: "passthrough",
+      syncHits: 1,
+    });
+  });
+
+  it("ignores Ogg-looking BOS pages with an invalid CRC", () => {
+    const gate = new OggSyncGate();
+    const chunks = collect(gate);
+    const invalidPage = oggPage(0x02, [1, 2, 3]);
+    invalidPage[invalidPage.length - 1] ^= 0xff;
+    const validPage = oggPage(0x02, [4, 5, 6]);
+
+    gate.syncToNextLogicalStream("crc");
+    gate.write(Buffer.concat([invalidPage, validPage]));
+
+    expect(Buffer.concat(chunks)).toEqual(validPage);
+    expect(gate.getStats()).toMatchObject({
+      discardedBytes: invalidPage.length,
+      outputBytes: validPage.length,
       mode: "passthrough",
       syncHits: 1,
     });
@@ -81,7 +130,7 @@ describe("OggSyncGate", () => {
 
     expect(Buffer.concat(chunks)).toEqual(oggPage(0x02, [6]));
     expect(gate.getStats()).toMatchObject({
-      outputBytes: 7,
+      outputBytes: oggPage(0x02, [6]).length,
       mode: "passthrough",
       syncHits: 1,
     });
