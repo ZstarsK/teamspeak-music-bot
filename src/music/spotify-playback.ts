@@ -25,6 +25,7 @@ const PCM_POST_TARGET_DISCARD_MS = 520;
 const PCM_GATE_READY_INPUT_BYTES = 44100 * 4 / 10; // 100ms of s16le stereo at librespot's 44.1kHz output
 const LIBRESPOT_EVENT_POLL_INTERVAL_MS = 80;
 const LIBRESPOT_EVENT_RETENTION = 200;
+const LIBRESPOT_BITRATE = "160";
 
 export interface SpotifyLibrespotEvent {
   PLAYER_EVENT?: string;
@@ -113,7 +114,7 @@ export function buildLibrespotArgs(params: {
     ...(params.usePassthrough ? ["--passthrough"] : ["--format", "S16"]),
     "--cache", params.audioCacheDir,
     "--system-cache", params.systemCacheDir,
-    "--bitrate", "320",
+    "--bitrate", LIBRESPOT_BITRATE,
     "--onevent", params.eventScriptPath,
     "--mixer", "softvol",
     "--volume-ctrl", "fixed",
@@ -686,6 +687,7 @@ export class SpotifyPlaybackEngine {
     player.playEncodedStream(gate, {
       inputFormat: "ogg",
       cleanup,
+      suppressTrackEnd: true,
     });
     this.attachedPlayer = player;
     this.streamAttached = true;
@@ -752,6 +754,7 @@ export class SpotifyPlaybackEngine {
     player.playPcmStream(gate, {
       inputSampleRate: 44100,
       cleanup,
+      suppressTrackEnd: true,
     });
     this.attachedPlayer = player;
     this.streamAttached = true;

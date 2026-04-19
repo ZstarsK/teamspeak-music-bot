@@ -90,8 +90,9 @@ const FRAME_DURATION_MS = 20;
 const DEFAULT_VOLUME = 8;
 const DUCKING_FADE_OUT_MS = 160;
 const PCM_SAMPLE_BLOCK_BYTES = 4; // 16-bit stereo
-const ENCODED_STREAM_INITIAL_BUFFER_BYTES = PCM_FRAME_BYTES * 25; // 500ms of decoded 48kHz stereo PCM
-const ENCODED_STREAM_NO_DATA_TIMEOUT_MS = 45_000;
+const ENCODED_STREAM_INITIAL_BUFFER_BYTES = PCM_FRAME_BYTES * 100; // 2s of decoded 48kHz stereo PCM
+const ENCODED_STREAM_REBUFFER_BYTES = PCM_FRAME_BYTES * 75; // 1.5s of decoded 48kHz stereo PCM
+const ENCODED_STREAM_NO_DATA_TIMEOUT_MS = 60_000;
 
 export interface AudioPlayerOptions {
   maxVolume?: number;
@@ -125,6 +126,9 @@ export class AudioPlayer extends EventEmitter {
   private discardingAudio = false;
   private initialBuffering = false;
   private initialBufferTargetBytes = 0;
+  private rebuffering = false;
+  private rebufferTargetBytes = 0;
+  private suppressTrackEnd = false;
 
   constructor(logger: Logger, options: AudioPlayerOptions = {}) {
     super();
@@ -209,6 +213,7 @@ export class AudioPlayer extends EventEmitter {
     options: {
       inputSampleRate?: number;
       seekSeconds?: number;
+      suppressTrackEnd?: boolean;
       cleanup?: () => void | Promise<void>;
     } = {},
   ): void {
@@ -236,6 +241,7 @@ export class AudioPlayer extends EventEmitter {
       seekSeconds,
       cleanup: options.cleanup,
       stdin: input,
+      suppressTrackEnd: options.suppressTrackEnd,
     });
   }
 
@@ -245,6 +251,8 @@ export class AudioPlayer extends EventEmitter {
       inputFormat?: string;
       seekSeconds?: number;
       initialBufferBytes?: number;
+      rebufferBytes?: number;
+      suppressTrackEnd?: boolean;
       cleanup?: () => void | Promise<void>;
     } = {},
   ): void {
@@ -273,6 +281,8 @@ export class AudioPlayer extends EventEmitter {
       cleanup: options.cleanup,
       stdin: input,
       initialBufferBytes: options.initialBufferBytes ?? ENCODED_STREAM_INITIAL_BUFFER_BYTES,
+      rebufferBytes: options.rebufferBytes ?? ENCODED_STREAM_REBUFFER_BYTES,
+      suppressTrackEnd: options.suppressTrackEnd,
     });
   }
 
@@ -286,6 +296,8 @@ export class AudioPlayer extends EventEmitter {
       cleanup?: () => void | Promise<void>;
       stdin?: NodeJS.ReadableStream;
       initialBufferBytes?: number;
+      rebufferBytes?: number;
+      suppressTrackEnd?: boolean;
     },
   ): void {
     this.stop();
@@ -300,6 +312,9 @@ export class AudioPlayer extends EventEmitter {
     this.cleanupCurrentSource = options.cleanup ?? null;
     this.initialBufferTargetBytes = Math.max(0, options.initialBufferBytes ?? 0);
     this.initialBuffering = this.initialBufferTargetBytes > 0;
+    this.rebufferTargetBytes = Math.max(0, options.rebufferBytes ?? 0);
+    this.rebuffering = false;
+    this.suppressTrackEnd = options.suppressTrackEnd === true;
 
     // Prevent rapid-fire spawn attempts when ffmpeg is broken
     if (this.consecutiveFailures >= AudioPlayer.MAX_CONSECUTIVE_FAILURES) {
@@ -354,6 +369,10 @@ export class AudioPlayer extends EventEmitter {
         this.logger.warn({ source: options.source, input: options.display }, "No PCM data received after playback start");
         this.spawnFailed = true;
         this.ffmpeg?.kill("SIGTERM");
+        if (this.suppressTrackEnd) {
+          this.logger.warn({ source: options.source }, "Suppressing no-data error for externally controlled playback source");
+          return;
+        }
         this.emit("error", err);
       }, noDataTimeoutMs)
       : null;
@@ -374,6 +393,14 @@ export class AudioPlayer extends EventEmitter {
         this.logger.info(
           { bufferedBytes: this.pcmBuffer.length, targetBytes: this.initialBufferTargetBytes },
           "Initial playback buffer filled",
+        );
+      }
+      if (this.rebuffering && this.pcmBuffer.length >= this.rebufferTargetBytes) {
+        this.rebuffering = false;
+        this.nextFrameTime = performance.now();
+        this.logger.info(
+          { bufferedBytes: this.pcmBuffer.length, targetBytes: this.rebufferTargetBytes },
+          "Playback buffer refilled",
         );
       }
       // Backpressure: pause FFmpeg stdout when buffer is too large
@@ -437,8 +464,15 @@ export class AudioPlayer extends EventEmitter {
       if (!this.frameLoopRunning) return;
 
       if (this.state === "playing") {
-        if (this.initialBuffering) {
+        if (this.initialBuffering || this.rebuffering) {
           this.nextFrameTime = performance.now();
+        } else if (this.pcmBuffer.length < PCM_FRAME_BYTES && this.ffmpeg && this.rebufferTargetBytes > 0) {
+          this.rebuffering = true;
+          this.nextFrameTime = performance.now();
+          this.logger.warn(
+            { bufferedBytes: this.pcmBuffer.length, targetBytes: this.rebufferTargetBytes },
+            "Playback buffer underrun, rebuffering",
+          );
         } else {
           this.sendNextFrame();
         }
@@ -453,6 +487,8 @@ export class AudioPlayer extends EventEmitter {
           // Don't emit trackEnd if ffmpeg spawn failed — prevents infinite retry cascade
           if (this.spawnFailed) {
             this.logger.warn("Suppressing trackEnd due to ffmpeg spawn failure");
+          } else if (this.suppressTrackEnd) {
+            this.logger.warn("Suppressing trackEnd for externally controlled playback source");
           } else {
             this.consecutiveFailures = 0; // Reset on successful track completion
             this.emit("trackEnd");
@@ -647,6 +683,9 @@ export class AudioPlayer extends EventEmitter {
     this.discardingAudio = false;
     this.initialBuffering = false;
     this.initialBufferTargetBytes = 0;
+    this.rebuffering = false;
+    this.rebufferTargetBytes = 0;
+    this.suppressTrackEnd = false;
   }
 
   /** Reset the consecutive failure counter (e.g. after user action) */
