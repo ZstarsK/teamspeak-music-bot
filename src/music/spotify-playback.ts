@@ -1,6 +1,7 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { PcmGate } from "../audio/pcm-gate.js";
 import type { AudioPlayer } from "../audio/player.js";
 import {
   getConfiguredSpotifyLibrespotAuthMode,
@@ -143,6 +144,7 @@ export class SpotifyPlaybackEngine {
   private activeTrackId: string | null = null;
   private currentOutputMode: "pcm" | "encoded" = "pcm";
   private transitionInFlight = false;
+  private pcmGate: PcmGate | null = null;
 
   constructor(
     private provider: SpotifyProvider,
@@ -205,7 +207,10 @@ export class SpotifyPlaybackEngine {
             trackUri,
           });
           this.playbackStarted = true;
-          await this.waitForTargetPlayback(account.id, deviceId, song.id);
+          const confirmed = await this.waitForTargetPlayback(account.id, deviceId, song.id);
+          if (!confirmed) {
+            throw new Error(`Spotify target playback was not confirmed for ${trackUri}`);
+          }
           await this.releasePcmBoundary(player, 0);
         });
       } else {
@@ -217,9 +222,19 @@ export class SpotifyPlaybackEngine {
         this.playbackStarted = true;
       }
     } catch (err) {
+      const shouldPauseSpotify = this.playbackStarted;
       this.playbackStarted = false;
+      this.beginPcmGateDiscard("spotify-playback-failed");
+      if (shouldPauseSpotify) {
+        try {
+          await this.pause();
+        } catch (pauseErr) {
+          this.logger.warn({ err: pauseErr }, "Failed to pause Spotify playback after transition failure");
+        }
+      }
       player.setDiscardingAudio(false);
-      player.stop();
+      player.stop({ skipCleanup: true });
+      this.destroyPcmGate();
       throw err;
     }
     this.logger.info({ trackUri, deviceId }, "Spotify playback started");
@@ -247,12 +262,15 @@ export class SpotifyPlaybackEngine {
       await this.withTransition(async () => {
         await this.preparePcmBoundary(player, targetSeconds);
         await this.provider.seekPlayback(targetSeconds * 1000, this.activeAccountId!, this.activeDeviceId);
-        await this.waitForTargetPlayback(
+        const confirmed = await this.waitForTargetPlayback(
           this.activeAccountId!,
           this.activeDeviceId,
           this.activeTrackId ?? undefined,
           targetSeconds * 1000,
         );
+        if (!confirmed) {
+          throw new Error(`Spotify target seek was not confirmed for ${targetSeconds}s`);
+        }
         await this.releasePcmBoundary(player, targetSeconds);
       });
       return;
@@ -268,6 +286,7 @@ export class SpotifyPlaybackEngine {
       clearInterval(this.watcher);
       this.watcher = null;
     }
+    this.destroyPcmGate();
     if (this.librespot) {
       this.librespot.kill("SIGTERM");
       this.librespot = null;
@@ -390,6 +409,7 @@ export class SpotifyPlaybackEngine {
     this.playbackStarted = false;
     this.attachedPlayer = null;
     this.streamAttached = false;
+    this.destroyPcmGate();
 
     child.stderr?.on("data", (chunk: Buffer) => {
       const message = chunk.toString().trimEnd();
@@ -403,6 +423,7 @@ export class SpotifyPlaybackEngine {
     child.on("close", (code, signal) => {
       this.logger.warn({ code, signal }, "librespot sidecar closed");
       if (this.librespot === child) {
+        this.destroyPcmGate();
         this.librespot = null;
         this.activeDeviceId = null;
         this.attachedPlayer = null;
@@ -483,24 +504,63 @@ export class SpotifyPlaybackEngine {
       throw new Error("librespot stdout is not available");
     }
     const cleanup = () => {
+      this.attachedPlayer = null;
+      this.streamAttached = false;
+      if (this.currentOutputMode === "pcm") {
+        this.destroyPcmGate();
+      }
       if (!this.playbackStarted) return;
       this.pause().catch((err) => {
         this.logger.warn({ err }, "Failed to pause Spotify playback during cleanup");
       });
     };
     if (this.currentOutputMode === "encoded") {
+      this.destroyPcmGate();
       player.playEncodedStream(stream, {
         inputFormat: "ogg",
         cleanup,
       });
     } else {
-      player.playPcmStream(stream, {
+      this.destroyPcmGate();
+      const gate = new PcmGate();
+      gate.on("error", (err) => {
+        this.logger.warn({ err }, "Spotify PCM gate error");
+      });
+      stream.once("error", (err) => {
+        this.logger.warn({ err }, "librespot stdout error");
+      });
+      stream.pipe(gate);
+      player.playPcmStream(gate, {
         inputSampleRate: 44100,
         cleanup,
       });
+      this.pcmGate = gate;
+      this.logger.info({ gateStats: gate.getStats() }, "Attached Spotify PCM gate");
     }
     this.attachedPlayer = player;
     this.streamAttached = true;
+  }
+
+  private beginPcmGateDiscard(reason: string): boolean {
+    if (!this.pcmGate) {
+      return false;
+    }
+    this.pcmGate.beginDiscard(reason);
+    this.logger.info({ reason, gateStats: this.pcmGate.getStats() }, "Spotify PCM gate discarding input");
+    return true;
+  }
+
+  private destroyPcmGate(): void {
+    if (!this.pcmGate) {
+      return;
+    }
+    try {
+      this.librespot?.stdout?.unpipe(this.pcmGate);
+    } catch (err) {
+      this.logger.debug({ err }, "Failed to unpipe Spotify PCM gate");
+    }
+    this.pcmGate.destroy();
+    this.pcmGate = null;
   }
 
   private async preparePcmBoundary(player: AudioPlayer, nextElapsedSeconds: number): Promise<void> {
@@ -509,7 +569,11 @@ export class SpotifyPlaybackEngine {
       return;
     }
     player.pause();
-    player.setDiscardingAudio(true);
+    if (this.beginPcmGateDiscard("spotify-transition")) {
+      player.setDiscardingAudio(false);
+    } else {
+      player.setDiscardingAudio(true);
+    }
     await this.pauseForTransition();
     const deadline = Date.now() + PCM_SWITCH_TIMEOUT_MS;
     let zeroSince = 0;
@@ -527,19 +591,30 @@ export class SpotifyPlaybackEngine {
     player.flushBufferedAudio();
     player.markSeek(nextElapsedSeconds);
     this.logger.info(
-      { bufferedBytes: player.getBufferedAudioBytes(), nextElapsedSeconds },
+      {
+        bufferedBytes: player.getBufferedAudioBytes(),
+        nextElapsedSeconds,
+        gateStats: this.pcmGate?.getStats(),
+      },
       "Prepared PCM boundary for Spotify transition",
     );
   }
 
   private async releasePcmBoundary(player: AudioPlayer, nextElapsedSeconds: number): Promise<void> {
     await this.discardPcmFor(player, PCM_POST_TARGET_DISCARD_MS);
+    if (this.pcmGate) {
+      this.pcmGate.endDiscard({ resetAlignment: true });
+    }
     player.flushBufferedAudio();
     player.markSeek(nextElapsedSeconds);
     player.setDiscardingAudio(false);
     player.resume();
     this.logger.info(
-      { bufferedBytes: player.getBufferedAudioBytes(), nextElapsedSeconds },
+      {
+        bufferedBytes: player.getBufferedAudioBytes(),
+        nextElapsedSeconds,
+        gateStats: this.pcmGate?.getStats(),
+      },
       "Released PCM boundary after Spotify transition",
     );
   }
@@ -557,7 +632,7 @@ export class SpotifyPlaybackEngine {
     deviceId: string | null,
     trackId?: string,
     targetProgressMs?: number,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const deadline = Date.now() + PCM_TARGET_WAIT_TIMEOUT_MS;
     let matchedSince = 0;
     while (Date.now() < deadline) {
@@ -566,8 +641,7 @@ export class SpotifyPlaybackEngine {
         const deviceMatches = !deviceId || !state?.deviceId || state.deviceId === deviceId;
         const trackMatches = !trackId || state?.trackId === trackId;
         const progressMatches = targetProgressMs === undefined
-          || Math.abs((state?.progressMs ?? 0) - targetProgressMs) < 8_000
-          || (state?.progressMs ?? 0) >= targetProgressMs;
+          || Math.abs((state?.progressMs ?? 0) - targetProgressMs) < 8_000;
         if (state && deviceMatches && trackMatches && progressMatches) {
           if (matchedSince === 0) matchedSince = Date.now();
           if (Date.now() - matchedSince >= PCM_TARGET_STABLE_MS) {
@@ -580,7 +654,7 @@ export class SpotifyPlaybackEngine {
               },
               "Spotify target playback confirmed",
             );
-            return;
+            return true;
           }
         } else {
           matchedSince = 0;
@@ -591,6 +665,7 @@ export class SpotifyPlaybackEngine {
       await sleep(PCM_TARGET_WAIT_INTERVAL_MS);
     }
     this.logger.warn({ deviceId, trackId, targetProgressMs }, "Timed out waiting for Spotify target playback confirmation");
+    return false;
   }
 
   private async pauseForTransition(): Promise<void> {
