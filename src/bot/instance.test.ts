@@ -39,6 +39,30 @@ describe("shouldForceTrackAdvance", () => {
       }),
     ).toBe(false);
   });
+
+  it("does not force advance quickly for Spotify because librespot has its own end signal", () => {
+    expect(
+      shouldForceTrackAdvance({
+        playerState: "playing",
+        platform: "spotify",
+        duration: 271,
+        elapsed: 270.2,
+        msSinceLastFrame: 2600,
+      }),
+    ).toBe(false);
+  });
+
+  it("still has a conservative Spotify stall fallback near the true end", () => {
+    expect(
+      shouldForceTrackAdvance({
+        playerState: "playing",
+        platform: "spotify",
+        duration: 271,
+        elapsed: 270.8,
+        msSinceLastFrame: 16_000,
+      }),
+    ).toBe(true);
+  });
 });
 
 describe("chooseInitialQueueIndex", () => {

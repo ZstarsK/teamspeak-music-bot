@@ -28,6 +28,9 @@ const LIBRESPOT_EVENT_RETENTION = 200;
 const LIBRESPOT_BITRATE = "160";
 const SPOTIFY_SOURCE_RECOVERY_MAX_ATTEMPTS = 2;
 const SPOTIFY_SOURCE_RECOVERY_DELAY_MS = 350;
+const SPOTIFY_END_LOCAL_GRACE_SECONDS = 0.35;
+const SPOTIFY_END_WAIT_POLL_MS = 120;
+const SPOTIFY_END_WAIT_MAX_MS = 8_000;
 
 export interface SpotifyLibrespotEvent {
   PLAYER_EVENT?: string;
@@ -200,6 +203,8 @@ export class SpotifyPlaybackEngine {
   private playbackCommandId = 0;
   private sourceRecoveryTrackUri: string | null = null;
   private sourceRecoveryAttempts = 0;
+  private activeTrackDuration = 0;
+  private pendingTrackEndTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
     private provider: SpotifyProvider,
@@ -222,6 +227,7 @@ export class SpotifyPlaybackEngine {
   async play(song: Song, player: AudioPlayer, onEnd: () => void | Promise<void>): Promise<void> {
     const account = await this.provider.getPlaybackAccount(song.accountId);
     const trackUri = this.provider.getTrackUri(song.id);
+    this.cancelPendingTrackEnd();
     if (this.sourceRecoveryTrackUri !== trackUri) {
       this.sourceRecoveryTrackUri = trackUri;
       this.sourceRecoveryAttempts = 0;
@@ -247,6 +253,7 @@ export class SpotifyPlaybackEngine {
       this.activeDeviceId = deviceId;
       this.activeTrackUri = trackUri;
       this.activeTrackId = song.id;
+      this.activeTrackDuration = song.duration;
       this.attachPlayerToStream(player, song, onEnd, commandId);
       reusingStream = false;
     } else if (!reusingStream) {
@@ -254,6 +261,7 @@ export class SpotifyPlaybackEngine {
       this.activeDeviceId = deviceId;
       this.activeTrackUri = trackUri;
       this.activeTrackId = song.id;
+      this.activeTrackDuration = song.duration;
       this.attachPlayerToStream(player, song, onEnd, commandId);
     } else if (pcmReusingStream) {
       this.logger.info(
@@ -264,6 +272,7 @@ export class SpotifyPlaybackEngine {
       this.activeDeviceId = deviceId;
       this.activeTrackUri = trackUri;
       this.activeTrackId = song.id;
+      this.activeTrackDuration = song.duration;
     }
     try {
       if (pcmReusingStream) {
@@ -404,6 +413,7 @@ export class SpotifyPlaybackEngine {
     this.activeDeviceId = null;
     this.activeTrackUri = null;
     this.activeTrackId = null;
+    this.activeTrackDuration = 0;
     this.playbackStarted = false;
     this.attachedPlayer = null;
     this.streamAttached = false;
@@ -411,6 +421,7 @@ export class SpotifyPlaybackEngine {
     this.transitionInFlight = false;
     this.sourceRecoveryTrackUri = null;
     this.sourceRecoveryAttempts = 0;
+    this.cancelPendingTrackEnd();
   }
 
   private ensureRuntimeFiles(): void {
@@ -521,6 +532,7 @@ export class SpotifyPlaybackEngine {
     this.activeDeviceId = null;
     this.activeTrackUri = null;
     this.activeTrackId = null;
+    this.activeTrackDuration = 0;
     this.playbackStarted = false;
     this.attachedPlayer = null;
     this.streamAttached = false;
@@ -546,8 +558,10 @@ export class SpotifyPlaybackEngine {
         this.destroyEncodedGate();
         this.librespot = null;
         this.activeDeviceId = null;
+        this.activeTrackDuration = 0;
         this.attachedPlayer = null;
         this.streamAttached = false;
+        this.cancelPendingTrackEnd();
       }
       this.lastExitDetail = { code, signal };
     });
@@ -601,7 +615,7 @@ export class SpotifyPlaybackEngine {
           continue;
         }
         if (this.isEventForActiveTrack(event)) {
-          this.handleTrackEnd(onEnd);
+          this.handleTrackEnd(onEnd, { waitForLocalPlayback: true, event });
         } else {
           this.logger.debug({ event, activeTrackUri: this.activeTrackUri }, "Ignoring stale Spotify end_of_track event");
         }
@@ -620,18 +634,124 @@ export class SpotifyPlaybackEngine {
     }
   }
 
-  private handleTrackEnd(onEnd: () => void | Promise<void>): void {
+  private handleTrackEnd(
+    onEnd: () => void | Promise<void>,
+    options: { waitForLocalPlayback?: boolean; event?: SpotifyLibrespotEvent } = {},
+  ): void {
+    if (options.waitForLocalPlayback && this.deferTrackEndUntilLocalPlayback(onEnd, options.event)) {
+      return;
+    }
+    this.completeTrackEnd(onEnd);
+  }
+
+  private completeTrackEnd(onEnd: () => void | Promise<void>): void {
+    this.cancelPendingTrackEnd();
     const now = Date.now();
     if (now - this.lastEndAt < 1000) return;
     this.lastEndAt = now;
     this.playbackStarted = false;
     this.activeTrackUri = null;
     this.activeTrackId = null;
+    this.activeTrackDuration = 0;
     this.sourceRecoveryTrackUri = null;
     this.sourceRecoveryAttempts = 0;
     Promise.resolve()
       .then(() => onEnd())
       .catch((err) => this.logger.error({ err }, "Spotify end-of-track handler failed"));
+  }
+
+  private deferTrackEndUntilLocalPlayback(
+    onEnd: () => void | Promise<void>,
+    event?: SpotifyLibrespotEvent,
+  ): boolean {
+    const player = this.attachedPlayer;
+    const duration = this.activeTrackDuration;
+    if (!player || !Number.isFinite(duration) || duration <= 0) {
+      return false;
+    }
+
+    const commandId = this.playbackCommandId;
+    const trackUri = this.activeTrackUri;
+    const trackId = this.activeTrackId;
+    const startedAt = Date.now();
+    const remainingMs = this.getLocalTrackEndRemainingMs(player, duration);
+    if (remainingMs <= 0) {
+      return false;
+    }
+    if (this.pendingTrackEndTimer) {
+      this.logger.debug(
+        { trackUri, trackId, elapsed: player.getElapsed(), duration },
+        "Spotify end_of_track already waiting for local playback",
+      );
+      return true;
+    }
+
+    this.logger.info(
+      {
+        event,
+        trackUri,
+        trackId,
+        elapsed: player.getElapsed(),
+        duration,
+        remainingMs,
+      },
+      "Delaying Spotify end_of_track until local playback catches up",
+    );
+
+    const check = () => {
+      this.pendingTrackEndTimer = null;
+      if (
+        commandId !== this.playbackCommandId ||
+        this.activeTrackUri !== trackUri ||
+        this.activeTrackId !== trackId
+      ) {
+        this.logger.debug(
+          { trackUri, trackId, activeTrackUri: this.activeTrackUri, activeTrackId: this.activeTrackId },
+          "Dropping stale delayed Spotify end_of_track",
+        );
+        return;
+      }
+
+      const elapsed = player.getElapsed();
+      const remaining = this.getLocalTrackEndRemainingMs(player, duration);
+      const waitedMs = Date.now() - startedAt;
+      const playerState = player.getState();
+      if (playerState === "paused") {
+        this.pendingTrackEndTimer = setTimeout(check, SPOTIFY_END_WAIT_POLL_MS);
+        return;
+      }
+      if (remaining <= 0 || playerState === "idle" || waitedMs >= SPOTIFY_END_WAIT_MAX_MS) {
+        this.logger.info(
+          {
+            trackUri,
+            trackId,
+            elapsed,
+            duration,
+            remainingMs: remaining,
+            waitedMs,
+            playerState,
+          },
+          "Completing delayed Spotify end_of_track",
+        );
+        this.completeTrackEnd(onEnd);
+        return;
+      }
+
+      this.pendingTrackEndTimer = setTimeout(check, Math.min(SPOTIFY_END_WAIT_POLL_MS, remaining));
+    };
+
+    this.pendingTrackEndTimer = setTimeout(check, Math.min(SPOTIFY_END_WAIT_POLL_MS, remainingMs));
+    return true;
+  }
+
+  private getLocalTrackEndRemainingMs(player: AudioPlayer, duration: number): number {
+    return Math.max(0, (duration - SPOTIFY_END_LOCAL_GRACE_SECONDS - player.getElapsed()) * 1000);
+  }
+
+  private cancelPendingTrackEnd(): void {
+    if (!this.pendingTrackEndTimer) return;
+    clearTimeout(this.pendingTrackEndTimer);
+    this.pendingTrackEndTimer = null;
   }
 
   private attachPlayerToStream(

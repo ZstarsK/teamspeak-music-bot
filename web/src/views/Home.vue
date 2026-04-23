@@ -18,21 +18,6 @@
       </div>
     </section>
 
-    <!-- 私人FM -->
-    <section class="section">
-      <h2 class="section-title">私人FM</h2>
-      <div class="fm-card hover-scale" @click="playFm">
-        <div class="fm-icon-wrapper">
-          <Icon icon="mdi:radio" class="fm-icon" />
-        </div>
-        <div class="fm-info">
-          <div class="fm-title">开启私人FM</div>
-          <div class="fm-desc">根据你的口味推荐音乐</div>
-        </div>
-        <Icon icon="mdi:play-circle" class="fm-play-icon" />
-      </div>
-    </section>
-
     <!-- 每日推荐 -->
     <section class="section" v-if="store.dailySongs.length > 0">
       <h2 class="section-title">每日推荐</h2>
@@ -121,34 +106,13 @@
         </div>
       </div>
     </section>
-
-    <!-- B站热门 -->
-    <section class="section" v-if="store.bilibiliPopular.length > 0">
-      <h2 class="section-title">
-        <span class="bili-badge">B</span>
-        B站热门
-      </h2>
-      <div class="daily-grid">
-        <div
-          v-for="song in store.bilibiliPopular.slice(0, 12)"
-          :key="song.id"
-          class="daily-card hover-scale"
-          @click="store.playById(song.id, song.platform, song)"
-        >
-          <CoverArt :url="song.coverUrl" :size="120" :radius="10" :show-shadow="true" />
-          <div class="daily-name">{{ song.name }}</div>
-          <div class="daily-artist">{{ song.artist }}</div>
-        </div>
-      </div>
-    </section>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue';
 import { Icon } from '@iconify/vue';
-import axios from 'axios';
-import { usePlayerStore, type PlaylistItem, type Song } from '../stores/player.js';
+import { usePlayerStore, type PlaylistItem } from '../stores/player.js';
 import CoverArt from '../components/CoverArt.vue';
 
 const store = usePlayerStore();
@@ -206,21 +170,6 @@ function playlistRoute(playlist: PlaylistItem) {
   const query: Record<string, string> = { platform: playlist.platform };
   if (playlist.account?.id) query.accountId = playlist.account.id;
   return { path: `/playlist/${playlist.id}`, query };
-}
-
-async function playFm() {
-  try {
-    const res = await axios.get('/api/music/personal/fm');
-    const songs: Song[] = res.data.songs;
-    if (songs.length > 0) {
-      await store.play(songs[0].name, songs[0].platform);
-      for (let i = 1; i < songs.length; i++) {
-        await store.addToQueue(songs[i].name, songs[i].platform);
-      }
-    }
-  } catch {
-    // Ignore
-  }
 }
 
 onMounted(() => {

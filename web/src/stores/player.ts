@@ -366,11 +366,10 @@ export const usePlayerStore = defineStore('player', {
         return;
       }
 
-      const [playlistRes, dailyRes, userRes, biliRes] = await Promise.allSettled([
+      const [playlistRes, dailyRes, userRes] = await Promise.allSettled([
         axios.get('/api/music/recommend/playlists'),
         axios.get('/api/music/recommend/songs'),
         axios.get('/api/music/user/playlists'),
-        axios.get('/api/music/bilibili/popular?limit=12'),
       ]);
 
       if (playlistRes.status === 'fulfilled') {
@@ -382,10 +381,6 @@ export const usePlayerStore = defineStore('player', {
       if (userRes.status === 'fulfilled') {
         this.userPlaylists = userRes.value.data.playlists;
       }
-      if (biliRes.status === 'fulfilled') {
-        this.bilibiliPopular = biliRes.value.data.songs;
-      }
-
       this.lastFetchTime = Date.now();
     },
   },

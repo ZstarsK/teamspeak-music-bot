@@ -33,9 +33,12 @@ const DUCKING_RELEASE_MS = 450;
 const DUCKING_POLL_INTERVAL_MS = 100;
 const TRACK_END_GRACE_SECONDS = 1.5;
 const TRACK_END_STALL_MS = 2000;
+const SPOTIFY_TRACK_END_GRACE_SECONDS = 0.35;
+const SPOTIFY_TRACK_END_STALL_MS = 15_000;
 
 export function shouldForceTrackAdvance(params: {
   playerState: "idle" | "playing" | "paused";
+  platform?: string;
   duration: number;
   elapsed: number;
   msSinceLastFrame: number;
@@ -43,10 +46,12 @@ export function shouldForceTrackAdvance(params: {
   if (params.playerState !== "playing") return false;
   if (!Number.isFinite(params.duration) || params.duration <= 0) return false;
   if (!Number.isFinite(params.elapsed) || params.elapsed < 0) return false;
-  if (!Number.isFinite(params.msSinceLastFrame) || params.msSinceLastFrame < TRACK_END_STALL_MS) {
+  const stallMs = params.platform === "spotify" ? SPOTIFY_TRACK_END_STALL_MS : TRACK_END_STALL_MS;
+  const graceSeconds = params.platform === "spotify" ? SPOTIFY_TRACK_END_GRACE_SECONDS : TRACK_END_GRACE_SECONDS;
+  if (!Number.isFinite(params.msSinceLastFrame) || params.msSinceLastFrame < stallMs) {
     return false;
   }
-  return params.elapsed >= Math.max(0, params.duration - TRACK_END_GRACE_SECONDS);
+  return params.elapsed >= Math.max(0, params.duration - graceSeconds);
 }
 
 export function chooseInitialQueueIndex(params: {
@@ -355,6 +360,7 @@ export class BotInstance extends EventEmitter {
     const msSinceLastFrame = lastFrameAt > 0 ? Date.now() - lastFrameAt : Number.POSITIVE_INFINITY;
     const shouldAdvance = shouldForceTrackAdvance({
       playerState: this.player.getState(),
+      platform: current.platform,
       duration: current.duration,
       elapsed: this.player.getElapsed(),
       msSinceLastFrame,
