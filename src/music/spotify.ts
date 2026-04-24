@@ -487,10 +487,12 @@ export class SpotifyProvider implements MusicProvider {
     deviceId: string;
     trackUri: string;
     positionMs?: number;
+    signal?: AbortSignal;
   }): Promise<void> {
     await this.request<void>("/me/player/play", params.accountId, {
       method: "PUT",
       params: { device_id: params.deviceId },
+      ...(params.signal ? { signal: params.signal } : {}),
       data: {
         uris: [params.trackUri],
         position_ms: Math.max(0, Math.round(params.positionMs ?? 0)),
@@ -498,9 +500,10 @@ export class SpotifyProvider implements MusicProvider {
     });
   }
 
-  async pausePlayback(accountId?: string, deviceId?: string | null): Promise<void> {
+  async pausePlayback(accountId?: string, deviceId?: string | null, signal?: AbortSignal): Promise<void> {
     await this.request<void>("/me/player/pause", accountId, {
       method: "PUT",
+      ...(signal ? { signal } : {}),
       ...(deviceId ? { params: { device_id: deviceId } } : {}),
     });
   }
@@ -512,9 +515,10 @@ export class SpotifyProvider implements MusicProvider {
     });
   }
 
-  async seekPlayback(positionMs: number, accountId?: string, deviceId?: string | null): Promise<void> {
+  async seekPlayback(positionMs: number, accountId?: string, deviceId?: string | null, signal?: AbortSignal): Promise<void> {
     await this.request<void>("/me/player/seek", accountId, {
       method: "PUT",
+      ...(signal ? { signal } : {}),
       params: {
         position_ms: Math.max(0, Math.round(positionMs)),
         ...(deviceId ? { device_id: deviceId } : {}),

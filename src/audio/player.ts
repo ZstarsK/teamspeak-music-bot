@@ -85,6 +85,18 @@ export interface PlayerEvents {
 }
 
 export type PlayerState = "idle" | "playing" | "paused";
+export type ExternallyControlledSourceCloseReason = "closed" | "no-data";
+
+export interface ExternallyControlledSourceCloseEvent {
+  source: string;
+  input: string;
+  code: number | null;
+  signal: NodeJS.Signals | null;
+  gotData: boolean;
+  framesPlayed: number;
+  elapsed: number;
+  reason: ExternallyControlledSourceCloseReason;
+}
 
 const FRAME_DURATION_MS = 20;
 const DEFAULT_VOLUME = 8;
@@ -214,6 +226,7 @@ export class AudioPlayer extends EventEmitter {
       inputSampleRate?: number;
       seekSeconds?: number;
       suppressTrackEnd?: boolean;
+      onSourceClosed?: (event: ExternallyControlledSourceCloseEvent) => void | Promise<void>;
       onSourceFailure?: (err: Error) => void | Promise<void>;
       cleanup?: () => void | Promise<void>;
     } = {},
@@ -243,6 +256,7 @@ export class AudioPlayer extends EventEmitter {
       cleanup: options.cleanup,
       stdin: input,
       suppressTrackEnd: options.suppressTrackEnd,
+      onSourceClosed: options.onSourceClosed,
       onSourceFailure: options.onSourceFailure,
     });
   }
@@ -255,6 +269,7 @@ export class AudioPlayer extends EventEmitter {
       initialBufferBytes?: number;
       rebufferBytes?: number;
       suppressTrackEnd?: boolean;
+      onSourceClosed?: (event: ExternallyControlledSourceCloseEvent) => void | Promise<void>;
       onSourceFailure?: (err: Error) => void | Promise<void>;
       cleanup?: () => void | Promise<void>;
     } = {},
@@ -286,6 +301,7 @@ export class AudioPlayer extends EventEmitter {
       initialBufferBytes: options.initialBufferBytes ?? ENCODED_STREAM_INITIAL_BUFFER_BYTES,
       rebufferBytes: options.rebufferBytes ?? ENCODED_STREAM_REBUFFER_BYTES,
       suppressTrackEnd: options.suppressTrackEnd,
+      onSourceClosed: options.onSourceClosed,
       onSourceFailure: options.onSourceFailure,
     });
   }
@@ -302,6 +318,7 @@ export class AudioPlayer extends EventEmitter {
       initialBufferBytes?: number;
       rebufferBytes?: number;
       suppressTrackEnd?: boolean;
+      onSourceClosed?: (event: ExternallyControlledSourceCloseEvent) => void | Promise<void>;
       onSourceFailure?: (err: Error) => void | Promise<void>;
     },
   ): void {
@@ -321,12 +338,20 @@ export class AudioPlayer extends EventEmitter {
     this.rebuffering = false;
     this.suppressTrackEnd = options.suppressTrackEnd === true;
     let sourceFailureReported = false;
+    let sourceCloseReported = false;
     const reportSuppressedSourceFailure = (err: Error): void => {
       if (sourceFailureReported) return;
       sourceFailureReported = true;
       Promise.resolve()
         .then(() => options.onSourceFailure?.(err))
         .catch((callbackErr) => this.logger.warn({ err: callbackErr }, "Playback source failure callback failed"));
+    };
+    const reportSuppressedSourceClose = (event: ExternallyControlledSourceCloseEvent): void => {
+      if (sourceCloseReported) return;
+      sourceCloseReported = true;
+      Promise.resolve()
+        .then(() => options.onSourceClosed?.(event))
+        .catch((callbackErr) => this.logger.warn({ err: callbackErr }, "Playback source close callback failed"));
     };
 
     // Prevent rapid-fire spawn attempts when ffmpeg is broken
@@ -384,6 +409,16 @@ export class AudioPlayer extends EventEmitter {
         this.ffmpeg?.kill("SIGTERM");
         if (this.suppressTrackEnd) {
           this.logger.warn({ source: options.source }, "Suppressing no-data error for externally controlled playback source");
+          reportSuppressedSourceClose({
+            source: options.source,
+            input: options.display,
+            code: null,
+            signal: null,
+            gotData: false,
+            framesPlayed: this.framesPlayed,
+            elapsed: this.getElapsed(),
+            reason: "no-data",
+          });
           reportSuppressedSourceFailure(err);
           return;
         }
@@ -429,9 +464,18 @@ export class AudioPlayer extends EventEmitter {
       this.logger.info({ exitCode: code, signal, gotData: gotFirstData, framesPlayed: this.framesPlayed }, "FFmpeg process closed");
       if (
         this.sessionId === playSessionId &&
-        this.suppressTrackEnd &&
-        (code !== 0 || !gotFirstData)
+        this.suppressTrackEnd
       ) {
+        reportSuppressedSourceClose({
+          source: options.source,
+          input: options.display,
+          code,
+          signal,
+          gotData: gotFirstData,
+          framesPlayed: this.framesPlayed,
+          elapsed: this.getElapsed(),
+          reason: "closed",
+        });
         reportSuppressedSourceFailure(
           new Error(`Externally controlled source stopped before audio completed (code=${code ?? "null"}, signal=${signal ?? "null"}, gotData=${gotFirstData})`),
         );

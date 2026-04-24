@@ -1,3 +1,4 @@
+import { PassThrough } from "node:stream";
 import { describe, expect, it } from "vitest";
 import { AudioPlayer } from "./player.js";
 import { getDefaultDuckingSettings } from "../data/config.js";
@@ -92,5 +93,39 @@ describe("AudioPlayer ducking", () => {
 
     expect((player as any).pcmBuffer).toEqual(Buffer.from([9]));
     expect(player.getBufferedAudioBytes()).toBe(0);
+  });
+
+  it("reports structured source close data for externally controlled streams", async () => {
+    const player = new AudioPlayer(logger);
+    const input = new PassThrough();
+    const events: any[] = [];
+    let resolveEvent!: () => void;
+    const eventPromise = new Promise<void>((resolve) => {
+      resolveEvent = resolve;
+    });
+
+    player.playEncodedStream(input, {
+      inputFormat: "ogg",
+      suppressTrackEnd: true,
+      onSourceClosed: (event) => {
+        events.push(event);
+        resolveEvent();
+      },
+    });
+    input.end(Buffer.from("not an ogg stream"));
+    await Promise.race([
+      eventPromise,
+      new Promise((resolve) => setTimeout(resolve, 1000)),
+    ]);
+    player.stop({ skipCleanup: true });
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      source: "encoded-stream",
+      gotData: false,
+      framesPlayed: 0,
+      reason: "closed",
+    });
+    expect(typeof events[0].elapsed).toBe("number");
   });
 });
