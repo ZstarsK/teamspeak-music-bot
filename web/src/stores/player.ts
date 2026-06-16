@@ -24,6 +24,28 @@ export interface BotStatus {
   volume: number;
   playMode: string;
   elapsed?: number;
+  duckingEnabled?: boolean;
+  duckingVolumePercent?: number;
+  duckingRecoveryMs?: number;
+  duckingThresholdDb?: number;
+  duckingActive?: boolean;
+  duckingActivity?: DuckingActivity | null;
+}
+
+export interface DuckingActivity {
+  clientId: number;
+  codec: number;
+  packetBytes: number;
+  sampledAt: number;
+  levelDb: number | null;
+  thresholdDb: number;
+  overThreshold: boolean;
+  consecutiveLoudFrames: number;
+  requiredConsecutiveFrames: number;
+  triggered: boolean;
+  decodeError: boolean;
+  reason: string;
+  active: boolean;
 }
 
 export interface PlaylistItem {
@@ -155,6 +177,13 @@ export const usePlayerStore = defineStore('player', {
           wasPlaying: status.playing && !status.paused,
         });
       }
+    },
+
+    updateDuckingActivity(botId: string, activity: DuckingActivity | null) {
+      const existing = this.bots.find((b) => b.id === botId);
+      if (!existing) return;
+      existing.duckingActivity = activity;
+      existing.duckingActive = activity?.active ?? false;
     },
 
     removeBotStatus(botId: string) {

@@ -27,7 +27,18 @@
       <div class="bot-list">
         <div v-for="bot in store.bots" :key="bot.id" class="bot-item">
           <div class="bot-info">
-            <div class="bot-name">{{ bot.name }}</div>
+            <div class="bot-main">
+              <div class="bot-name">{{ bot.name }}</div>
+              <div class="ducking-meter">
+                <span class="ducking-meter-label">Ducking</span>
+                <span :class="['ducking-pill', bot.duckingActive ? 'active' : '']">
+                  {{ bot.duckingActive ? '压低中' : '待机' }}
+                </span>
+                <span>{{ formatDuckingLevel(bot) }}</span>
+                <span>{{ formatDuckingFrames(bot) }}</span>
+                <span>{{ formatDuckingReason(bot) }}</span>
+              </div>
+            </div>
             <div class="bot-status" :class="botStatusClass(bot)">
               {{ botStatusText(bot) }}
             </div>
@@ -50,6 +61,7 @@
       <div v-if="editingBot" class="edit-modal-overlay" @click.self="editingBot = null">
         <div class="edit-modal">
           <h3 class="modal-title">编辑机器人</h3>
+          <div v-if="editError" class="form-error">{{ editError }}</div>
           <div class="form-group">
             <label>名称</label>
             <input v-model="editForm.name" class="input" />
@@ -81,6 +93,17 @@
             <input v-model="editForm.serverPassword" class="input" type="password" placeholder="服务器有密码时填写" />
           </div>
           <div class="modal-divider">Ducking</div>
+          <div class="ducking-live-panel">
+            <div class="ducking-live-row">
+              <span>实时音量</span>
+              <strong>{{ formatDuckingLevel(editingBotStatus) }}</strong>
+            </div>
+            <div class="ducking-live-meta">
+              <span>{{ editingBotStatus?.duckingActive ? '压低中' : '待机' }}</span>
+              <span>{{ formatDuckingFrames(editingBotStatus) }}</span>
+              <span>{{ formatDuckingReason(editingBotStatus) }}</span>
+            </div>
+          </div>
           <div class="setting-row modal-setting-row">
             <div class="setting-label">
               <Icon icon="mdi:volume-medium" class="setting-icon" />
@@ -610,7 +633,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted, onUnmounted } from 'vue';
+import { computed, ref, reactive, onMounted, onUnmounted } from 'vue';
 import { Icon } from '@iconify/vue';
 import axios from 'axios';
 import QRCode from 'qrcode';
@@ -633,6 +656,37 @@ function botStatusText(bot: any) {
   return '在线';
 }
 
+function formatDuckingLevel(bot: any | null | undefined) {
+  const activity = bot?.duckingActivity;
+  if (!activity) return '等待采样';
+  if (typeof activity.levelDb !== 'number') return '无有效音量';
+  return `${activity.levelDb.toFixed(1)} dB / ${activity.thresholdDb} dB`;
+}
+
+function formatDuckingFrames(bot: any | null | undefined) {
+  const activity = bot?.duckingActivity;
+  if (!activity) return '0/3';
+  return `${activity.consecutiveLoudFrames}/${activity.requiredConsecutiveFrames}`;
+}
+
+function formatDuckingReason(bot: any | null | undefined) {
+  const reason = bot?.duckingActivity?.reason;
+  switch (reason) {
+    case 'triggered':
+      return '已触发';
+    case 'over-threshold':
+      return '超过阈值';
+    case 'below-threshold':
+      return '低于阈值';
+    case 'decode-error':
+      return '解码失败';
+    case 'unsupported-codec':
+      return '不支持的编码';
+    default:
+      return '未检测';
+  }
+}
+
 const newBotName = ref('');
 const newBotServer = ref('');
 const newBotPort = ref(9987);
@@ -642,6 +696,10 @@ const newBotServerPassword = ref('');
 
 // Edit bot
 const editingBot = ref<string | null>(null);
+const editError = ref('');
+const editingBotStatus = computed(() => (
+  editingBot.value ? store.bots.find((bot) => bot.id === editingBot.value) ?? null : null
+));
 const editForm = reactive({
   name: '',
   serverAddress: '',
@@ -964,7 +1022,18 @@ async function deleteBot(botId: string, botName: string) {
 
 async function openEditBot(bot: any) {
   editingBot.value = bot.id;
+  editError.value = '';
   editForm.name = bot.name;
+  editForm.serverAddress = bot.serverAddress ?? '';
+  editForm.serverPort = bot.serverPort ?? 9987;
+  editForm.nickname = bot.nickname ?? '';
+  editForm.defaultChannel = bot.defaultChannel ?? '';
+  editForm.channelPassword = bot.channelPassword ?? '';
+  editForm.serverPassword = bot.serverPassword ?? '';
+  editForm.duckingEnabled = bot.duckingEnabled ?? true;
+  editForm.duckingVolumePercent = bot.duckingVolumePercent ?? 35;
+  editForm.duckingRecoveryMs = bot.duckingRecoveryMs ?? 420;
+  editForm.duckingThresholdDb = bot.duckingThresholdDb ?? -42;
   // Fetch saved config to fill all fields
   try {
     const res = await axios.get(`/api/bot/${bot.id}/config`);
@@ -977,30 +1046,39 @@ async function openEditBot(bot: any) {
     editForm.duckingEnabled = res.data.duckingEnabled ?? true;
     editForm.duckingVolumePercent = res.data.duckingVolumePercent ?? 35;
     editForm.duckingRecoveryMs = res.data.duckingRecoveryMs ?? 420;
-    editForm.duckingThresholdDb = res.data.duckingThresholdDb ?? -42;
+    if (typeof res.data.duckingThresholdDb === 'number') {
+      editForm.duckingThresholdDb = res.data.duckingThresholdDb;
+    }
   } catch {
-    // Config not found — use defaults
-    editForm.serverAddress = '';
-    editForm.serverPort = 9987;
-    editForm.nickname = bot.name;
-    editForm.defaultChannel = '';
-    editForm.channelPassword = '';
-    editForm.serverPassword = '';
-    editForm.duckingEnabled = true;
-    editForm.duckingVolumePercent = 35;
-    editForm.duckingRecoveryMs = 420;
-    editForm.duckingThresholdDb = -42;
+    // Keep the values seeded from the bot list.
   }
 }
 
 async function saveEditBot() {
   if (!editingBot.value) return;
   try {
-    await axios.put(`/api/bot/${editingBot.value}`, { ...editForm });
+    const res = await axios.put(`/api/bot/${editingBot.value}`, { ...editForm });
+    const saved = res.data?.config;
+    if (saved) {
+      editForm.serverAddress = saved.serverAddress ?? editForm.serverAddress;
+      editForm.serverPort = saved.serverPort ?? editForm.serverPort;
+      editForm.nickname = saved.nickname ?? editForm.nickname;
+      editForm.defaultChannel = saved.defaultChannel ?? editForm.defaultChannel;
+      editForm.channelPassword = saved.channelPassword ?? editForm.channelPassword;
+      editForm.serverPassword = saved.serverPassword ?? editForm.serverPassword;
+      editForm.duckingEnabled = saved.duckingEnabled ?? editForm.duckingEnabled;
+      editForm.duckingVolumePercent = saved.duckingVolumePercent ?? editForm.duckingVolumePercent;
+      editForm.duckingRecoveryMs = saved.duckingRecoveryMs ?? editForm.duckingRecoveryMs;
+      if (typeof saved.duckingThresholdDb === 'number') {
+        editForm.duckingThresholdDb = saved.duckingThresholdDb;
+      }
+    }
     editingBot.value = null;
     await store.fetchBots();
-  } catch {
-    // Ignore
+  } catch (err: any) {
+    editError.value = err?.response?.data?.error
+      ? `保存失败：${err.response.data.error}`
+      : '保存失败，请稍后重试';
   }
 }
 
@@ -1168,11 +1246,44 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 12px;
+  min-width: 0;
+}
+
+.bot-main {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
 }
 
 .bot-name {
   font-size: 14px;
   font-weight: 500;
+}
+
+.ducking-meter {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+
+.ducking-meter-label {
+  font-weight: 700;
+}
+
+.ducking-pill {
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--border-color);
+  color: var(--text-tertiary);
+
+  &.active {
+    background: rgba(255, 152, 0, 0.18);
+    color: #ff9800;
+  }
 }
 
 .bot-status {
@@ -1202,6 +1313,30 @@ onUnmounted(() => {
   letter-spacing: 0.04em;
   color: var(--text-tertiary);
   text-transform: uppercase;
+}
+
+.ducking-live-panel {
+  margin: 8px 0 14px;
+  padding: 10px 12px;
+  background: var(--hover-bg);
+  border-radius: var(--radius-sm);
+}
+
+.ducking-live-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+}
+
+.ducking-live-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 6px;
+  color: var(--text-tertiary);
+  font-size: 11px;
 }
 
 .modal-setting-row {
@@ -1577,6 +1712,12 @@ onUnmounted(() => {
   font-size: 20px;
   font-weight: 700;
   margin-bottom: 20px;
+}
+
+.form-error {
+  margin-bottom: 12px;
+  color: var(--danger-color, #ff6b6b);
+  font-size: 13px;
 }
 
 .modal-actions {

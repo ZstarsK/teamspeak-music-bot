@@ -208,7 +208,11 @@ export function createBotRouter(
           ? { duckingThresholdDb: Math.round(duckingThresholdDb) }
           : {}),
       });
-      res.json({ success: true });
+      const saved = botManager.getBotConfig(req.params.id);
+      res.json({
+        success: true,
+        config: saved ?? null,
+      });
     } catch (err) {
       logger.error({ err }, "Failed to update bot");
       res.status(500).json({ error: (err as Error).message });

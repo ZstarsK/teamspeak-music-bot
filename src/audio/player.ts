@@ -105,8 +105,15 @@ const PCM_SAMPLE_BLOCK_BYTES = 4; // 16-bit stereo
 const ENCODED_STREAM_INITIAL_BUFFER_BYTES = PCM_FRAME_BYTES * 50; // 1s of decoded 48kHz stereo PCM
 const ENCODED_STREAM_REBUFFER_BYTES = PCM_FRAME_BYTES * 75; // 1.5s of decoded 48kHz stereo PCM
 const ENCODED_STREAM_NO_DATA_TIMEOUT_MS = 15_000;
-const ENCODED_STREAM_REBUFFER_STALL_TIMEOUT_MS = 8_000;
+const PCM_STREAM_NO_DATA_TIMEOUT_MS = 10_000;
+const EXTERNAL_STREAM_STALL_TIMEOUT_MS = 6_000;
+const EXTERNAL_STREAM_STALL_CHECK_INTERVAL_MS = 500;
 const FFMPEG_FORCE_KILL_TIMEOUT_MS = 1_500;
+
+/** Check whether playback depends on a caller-owned streaming source */
+function isExternallyControlledAudioSource(source: string): boolean {
+  return source === "encoded-stream" || source === "pcm-stream" || source === "pcm-pipe";
+}
 
 export interface AudioPlayerOptions {
   maxVolume?: number;
@@ -405,7 +412,7 @@ export class AudioPlayer extends EventEmitter {
       options.source === "encoded-stream"
         ? ENCODED_STREAM_NO_DATA_TIMEOUT_MS
         : options.source === "pcm-stream" || options.source === "pcm-pipe"
-          ? 20_000
+          ? PCM_STREAM_NO_DATA_TIMEOUT_MS
           : 0;
     const noDataTimer = noDataTimeoutMs > 0
       ? setTimeout(() => {
@@ -432,42 +439,67 @@ export class AudioPlayer extends EventEmitter {
         this.emit("error", err);
       }, noDataTimeoutMs)
       : null;
-    let rebufferStallTimer: ReturnType<typeof setInterval> | null = null;
-    if (options.source === "encoded-stream") {
-      rebufferStallTimer = setInterval(() => {
+    let streamStallTimer: ReturnType<typeof setInterval> | null = null;
+    let streamStallReported = false;
+    if (isExternallyControlledAudioSource(options.source)) {
+      streamStallTimer = setInterval(() => {
         if (this.sessionId !== playSessionId) {
-          if (rebufferStallTimer) clearInterval(rebufferStallTimer);
+          if (streamStallTimer) clearInterval(streamStallTimer);
           return;
         }
-        if (!this.suppressTrackEnd || !this.rebuffering || !this.ffmpeg || lastPcmDataAt <= 0) return;
+        if (
+          streamStallReported ||
+          this.state !== "playing" ||
+          !this.ffmpeg ||
+          ffmpeg !== this.ffmpeg ||
+          !gotFirstData ||
+          lastPcmDataAt <= 0 ||
+          this.discardingAudio
+        ) {
+          return;
+        }
+        const bufferedBytes = this.getBufferedAudioBytes();
+        // Only treat silence as a stall once local playback has drained its playable PCM buffer.
+        const waitingForPcm = this.initialBuffering || this.rebuffering || bufferedBytes < PCM_FRAME_BYTES;
+        if (!waitingForPcm) return;
         const stalledMs = Date.now() - lastPcmDataAt;
-        if (stalledMs < ENCODED_STREAM_REBUFFER_STALL_TIMEOUT_MS) return;
-        const err = new Error(`No PCM data received from ${options.source} while rebuffering`);
+        if (stalledMs < EXTERNAL_STREAM_STALL_TIMEOUT_MS) return;
+        streamStallReported = true;
+        if (streamStallTimer) clearInterval(streamStallTimer);
+        const err = new Error(`No PCM data received from ${options.source} after playback buffer drained`);
         this.logger.warn(
           {
             source: options.source,
             input: options.display,
             stalledMs,
-            bufferedBytes: this.getBufferedAudioBytes(),
-            targetBytes: this.rebufferTargetBytes,
+            bufferedBytes,
+            initialBuffering: this.initialBuffering,
+            rebuffering: this.rebuffering,
+            initialTargetBytes: this.initialBufferTargetBytes,
+            rebufferTargetBytes: this.rebufferTargetBytes,
             elapsed: this.getElapsed(),
           },
-          "Playback stream stalled while rebuffering",
+          "Playback stream stalled while waiting for PCM data",
         );
         this.spawnFailed = true;
-        reportSuppressedSourceClose({
-          source: options.source,
-          input: options.display,
-          code: null,
-          signal: null,
-          gotData: gotFirstData,
-          framesPlayed: this.framesPlayed,
-          elapsed: this.getElapsed(),
-          reason: "stalled",
-        });
-        reportSuppressedSourceFailure(err);
-        this.terminateFfmpegProcess(ffmpeg, "rebuffer-stall");
-      }, 1000);
+        if (this.suppressTrackEnd) {
+          reportSuppressedSourceClose({
+            source: options.source,
+            input: options.display,
+            code: null,
+            signal: null,
+            gotData: gotFirstData,
+            framesPlayed: this.framesPlayed,
+            elapsed: this.getElapsed(),
+            reason: "stalled",
+          });
+          reportSuppressedSourceFailure(err);
+        } else {
+          this.emit("error", err);
+        }
+        this.terminateFfmpegProcess(ffmpeg, "stream-stall");
+      }, EXTERNAL_STREAM_STALL_CHECK_INTERVAL_MS);
+      streamStallTimer.unref?.();
     }
     ffmpeg.stdout!.on("data", (chunk: Buffer) => {
       if (this.sessionId !== playSessionId || ffmpeg !== this.ffmpeg) return;
@@ -507,7 +539,7 @@ export class AudioPlayer extends EventEmitter {
 
     ffmpeg.on("close", (code, signal) => {
       if (noDataTimer) clearTimeout(noDataTimer);
-      if (rebufferStallTimer) clearInterval(rebufferStallTimer);
+      if (streamStallTimer) clearInterval(streamStallTimer);
       this.forgetFfmpegProcess(ffmpeg);
       this.logger.info({ exitCode: code, signal, gotData: gotFirstData, framesPlayed: this.framesPlayed }, "FFmpeg process closed");
       if (

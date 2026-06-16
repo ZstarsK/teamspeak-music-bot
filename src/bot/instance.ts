@@ -20,6 +20,7 @@ import type { BotDatabase, ProfileConfig } from "../data/database.js";
 import {
   DuckingDetector,
   clampThresholdDb,
+  type DuckingDetectionResult,
 } from "../audio/ducking-detector.js";
 import {
   DUCKING_RECOVERY_MS_MAX,
@@ -37,6 +38,7 @@ import { BotProfileManager } from "./profile.js";
 
 const DUCKING_RELEASE_MS = 450;
 const DUCKING_POLL_INTERVAL_MS = 100;
+const DUCKING_ACTIVITY_EMIT_INTERVAL_MS = 250;
 const TRACK_END_GRACE_SECONDS = 1.5;
 const TRACK_END_STALL_MS = 2000;
 const SPOTIFY_TRACK_END_GRACE_SECONDS = 0.35;
@@ -107,6 +109,28 @@ export interface BotStatus {
   volume: number;
   playMode: PlayMode;
   elapsed: number; // ground truth elapsed seconds from frame count
+  duckingEnabled: boolean;
+  duckingVolumePercent: number;
+  duckingRecoveryMs: number;
+  duckingThresholdDb: number;
+  duckingActive: boolean;
+  duckingActivity: DuckingActivityStatus | null;
+}
+
+export interface DuckingActivityStatus {
+  clientId: number;
+  codec: number;
+  packetBytes: number;
+  sampledAt: number;
+  levelDb: number | null;
+  thresholdDb: number;
+  overThreshold: boolean;
+  consecutiveLoudFrames: number;
+  requiredConsecutiveFrames: number;
+  triggered: boolean;
+  decodeError: boolean;
+  reason: string;
+  active: boolean;
 }
 
 export class BotInstance extends EventEmitter {
@@ -134,6 +158,9 @@ export class BotInstance extends EventEmitter {
   private profileManager: BotProfileManager;
   private duckingTimer: ReturnType<typeof setInterval> | null = null;
   private lastVoicePacketAt = 0;
+  private lastDuckingActivity: DuckingActivityStatus | null = null;
+  private lastDuckingActivityEmitAt = 0;
+  private duckingActive = false;
   private forcedAdvanceToken: string | null = null;
   private duckingSettings: DuckingSettings;
   private duckingDetector: DuckingDetector;
@@ -218,6 +245,7 @@ export class BotInstance extends EventEmitter {
       this.connected = false;
       this.stopDuckingMonitor();
       this.lastVoicePacketAt = 0;
+      this.resetDuckingActivity();
       this.duckingDetector.reset();
       this.player.setDuckingActive(false);
       this.player.stop();
@@ -233,6 +261,7 @@ export class BotInstance extends EventEmitter {
       this._startIdlePoller();
       this.startDuckingMonitor();
       this.lastVoicePacketAt = 0;
+      this.resetDuckingActivity();
       this.duckingDetector.reset();
       this.player.setDuckingActive(false);
     });
@@ -261,6 +290,7 @@ export class BotInstance extends EventEmitter {
     this._cancelIdleTimer();
     this.stopDuckingMonitor();
     this.lastVoicePacketAt = 0;
+    this.resetDuckingActivity();
     this.duckingDetector.reset();
     this.player.setDuckingActive(false);
     this.player.stop();
@@ -324,7 +354,7 @@ export class BotInstance extends EventEmitter {
       const active =
         this.duckingSettings.enabled &&
         Date.now() - this.lastVoicePacketAt < releaseMs;
-      this.player.setDuckingActive(active);
+      this.setDuckingActive(active);
       this.checkPlaybackStall();
     }, DUCKING_POLL_INTERVAL_MS);
   }
@@ -333,7 +363,9 @@ export class BotInstance extends EventEmitter {
     if (!this.duckingSettings.enabled) return;
     if (this.player.getState() !== "playing") return;
     if (packet.clientId === this.tsClient.getClientId()) return;
-    if (!this.duckingDetector.shouldTrigger(packet, this.duckingSettings)) return;
+    const result = this.duckingDetector.analyzePacket(packet, this.duckingSettings);
+    this.recordDuckingDetection(result);
+    if (!result.triggered) return;
     this.lastVoicePacketAt = Date.now();
   }
 
@@ -345,6 +377,60 @@ export class BotInstance extends EventEmitter {
 
   syncDuckingConfig(): void {
     this.player.setDuckingConfig(this.duckingSettings);
+  }
+
+  private setDuckingActive(active: boolean): void {
+    if (this.duckingActive !== active) {
+      this.duckingActive = active;
+      if (this.lastDuckingActivity) {
+        this.lastDuckingActivity = {
+          ...this.lastDuckingActivity,
+          active,
+        };
+      }
+      this.emit("duckingActivity", this.getDuckingActivity());
+    }
+    this.player.setDuckingActive(active);
+  }
+
+  private recordDuckingDetection(result: DuckingDetectionResult): void {
+    if (!result.sampled && result.reason !== "unsupported-codec") return;
+    const sampledAt = result.sampledAt ?? Date.now();
+    this.lastDuckingActivity = {
+      clientId: result.clientId,
+      codec: result.codec,
+      packetBytes: result.packetBytes,
+      sampledAt,
+      levelDb: result.levelDb,
+      thresholdDb: result.thresholdDb,
+      overThreshold: result.overThreshold,
+      consecutiveLoudFrames: result.consecutiveLoudFrames,
+      requiredConsecutiveFrames: result.requiredConsecutiveFrames,
+      triggered: result.triggered,
+      decodeError: result.decodeError,
+      reason: result.reason,
+      active: this.duckingActive,
+    };
+
+    if (
+      result.triggered ||
+      result.decodeError ||
+      result.reason === "unsupported-codec" ||
+      sampledAt - this.lastDuckingActivityEmitAt >= DUCKING_ACTIVITY_EMIT_INTERVAL_MS
+    ) {
+      this.lastDuckingActivityEmitAt = sampledAt;
+      this.emit("duckingActivity", this.getDuckingActivity());
+    }
+  }
+
+  private resetDuckingActivity(): void {
+    this.duckingActive = false;
+    this.lastDuckingActivity = null;
+    this.lastDuckingActivityEmitAt = 0;
+  }
+
+  getDuckingActivity(): DuckingActivityStatus | null {
+    return this.lastDuckingActivity ? { ...this.lastDuckingActivity } : null;
   }
 
   getDuckingSettings(): DuckingSettings {
@@ -1046,6 +1132,12 @@ export class BotInstance extends EventEmitter {
       volume: this.player.getVolume(),
       playMode: this.queue.getMode(),
       elapsed: this.player.getElapsed(),
+      duckingEnabled: this.duckingSettings.enabled,
+      duckingVolumePercent: this.duckingSettings.volumePercent,
+      duckingRecoveryMs: this.duckingSettings.recoveryMs,
+      duckingThresholdDb: this.duckingSettings.thresholdDb,
+      duckingActive: this.duckingActive,
+      duckingActivity: this.getDuckingActivity(),
     };
   }
 

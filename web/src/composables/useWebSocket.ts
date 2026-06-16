@@ -54,6 +54,9 @@ export function useWebSocket() {
             }
           }
           break;
+        case 'duckingActivity':
+          store.updateDuckingActivity(data.botId, data.activity ?? null);
+          break;
         case 'botRemoved':
           // Bot was deleted from the server — drop from local state entirely
           store.removeBotStatus(data.botId);

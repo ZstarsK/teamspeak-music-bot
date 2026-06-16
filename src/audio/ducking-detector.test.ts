@@ -55,11 +55,25 @@ describe("DuckingDetector", () => {
       encoder: encoderFor(pcmFrame(6000)),
       now: () => now,
       sampleIntervalMs: 0,
-      requiredConsecutiveFrames: 2,
+      requiredConsecutiveFrames: 3,
     });
     const settings = { ...getDefaultDuckingSettings(), thresholdDb: -25 };
 
-    expect(detector.shouldTrigger(packet(), settings)).toBe(false);
+    const first = detector.analyzePacket(packet(), settings);
+    expect(first.sampled).toBe(true);
+    expect(first.triggered).toBe(false);
+    expect(first.levelDb).toBeGreaterThan(-25);
+    expect(first.consecutiveLoudFrames).toBe(1);
+
+    now += 60;
+    const second = detector.analyzePacket(packet(), settings);
+    expect(second.triggered).toBe(false);
+    expect(second.consecutiveLoudFrames).toBe(2);
+
+    const third = detector.analyzePacket(packet(), settings);
+    expect(third.triggered).toBe(true);
+    expect(third.consecutiveLoudFrames).toBe(3);
+
     now += 60;
     expect(detector.shouldTrigger(packet(), settings)).toBe(true);
   });
@@ -115,5 +129,51 @@ describe("DuckingDetector", () => {
     });
 
     expect(detector.shouldTrigger(packet(), getDefaultDuckingSettings())).toBe(false);
+  });
+
+  it("reports throttled packets without decoding them again", () => {
+    let now = 0;
+    const decode = vi.fn(() => pcmFrame(6000));
+    const detector = new DuckingDetector({
+      logger,
+      encoder: {
+        encode() {
+          return Buffer.alloc(0);
+        },
+        decode,
+      },
+      now: () => now,
+      sampleIntervalMs: 60,
+      requiredConsecutiveFrames: 3,
+    });
+
+    const settings = { ...getDefaultDuckingSettings(), thresholdDb: -30 };
+    const first = detector.analyzePacket(packet(), settings);
+    expect(first.reason).toBe("over-threshold");
+    now += 20;
+    const second = detector.analyzePacket(packet(), settings);
+    expect(second.reason).toBe("throttled");
+    expect(decode).toHaveBeenCalledTimes(1);
+  });
+
+  it("expires a stale loud frame streak", () => {
+    let now = 0;
+    const detector = new DuckingDetector({
+      logger,
+      encoder: encoderFor(pcmFrame(6000)),
+      now: () => now,
+      sampleIntervalMs: 0,
+      requiredConsecutiveFrames: 3,
+      loudStreakTimeoutMs: 350,
+    });
+    const settings = { ...getDefaultDuckingSettings(), thresholdDb: -25 };
+
+    expect(detector.analyzePacket(packet(), settings).consecutiveLoudFrames).toBe(1);
+    now += 60;
+    expect(detector.analyzePacket(packet(), settings).consecutiveLoudFrames).toBe(2);
+    now += 500;
+    const afterPause = detector.analyzePacket(packet(), settings);
+    expect(afterPause.triggered).toBe(false);
+    expect(afterPause.consecutiveLoudFrames).toBe(1);
   });
 });

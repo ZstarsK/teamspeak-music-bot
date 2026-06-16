@@ -16,6 +16,7 @@ export function setupWebSocket(
     stateChange: () => void;
     connected: () => void;
     disconnected: () => void;
+    duckingActivity: (activity: ReturnType<BotInstance["getDuckingActivity"]>) => void;
   }>();
 
   wss.on("connection", (ws) => {
@@ -55,6 +56,7 @@ export function setupWebSocket(
     existing.bot.removeListener("stateChange", existing.stateChange);
     existing.bot.removeListener("connected", existing.connected);
     existing.bot.removeListener("disconnected", existing.disconnected);
+    existing.bot.removeListener("duckingActivity", existing.duckingActivity);
     attachedBots.delete(id);
   }
 
@@ -91,15 +93,25 @@ export function setupWebSocket(
       });
     };
 
+    const onDuckingActivity = (activity: ReturnType<BotInstance["getDuckingActivity"]>) => {
+      broadcast({
+        type: "duckingActivity",
+        botId: bot.id,
+        activity,
+      });
+    };
+
     bot.on("stateChange", onStateChange);
     bot.on("connected", onConnected);
     bot.on("disconnected", onDisconnected);
+    bot.on("duckingActivity", onDuckingActivity);
 
     attachedBots.set(bot.id, {
       bot,
       stateChange: onStateChange,
       connected: onConnected,
       disconnected: onDisconnected,
+      duckingActivity: onDuckingActivity,
     });
   }
 

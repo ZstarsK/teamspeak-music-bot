@@ -6,9 +6,11 @@ import {
 } from "../data/config.js";
 import type { Logger } from "../logger.js";
 import type { TS3VoiceData } from "../ts-protocol/client.js";
+import { CODEC_OPUS_MUSIC, CODEC_OPUS_VOICE } from "../ts-protocol/voice.js";
 
 const SAMPLE_INTERVAL_MS = 60;
-const REQUIRED_CONSECUTIVE_FRAMES = 2;
+const REQUIRED_CONSECUTIVE_FRAMES = 3;
+const LOUD_STREAK_TIMEOUT_MS = 350;
 const MIN_DBFS = -120;
 
 export interface DuckingDetectorOptions {
@@ -17,12 +19,37 @@ export interface DuckingDetectorOptions {
   now?: () => number;
   sampleIntervalMs?: number;
   requiredConsecutiveFrames?: number;
+  loudStreakTimeoutMs?: number;
 }
 
 interface ClientVoiceState {
   lastSampleAt: number;
   consecutiveLoudFrames: number;
   encoder: Encoder;
+}
+
+export type DuckingDetectionReason =
+  | "throttled"
+  | "unsupported-codec"
+  | "decode-error"
+  | "below-threshold"
+  | "over-threshold"
+  | "triggered";
+
+export interface DuckingDetectionResult {
+  clientId: number;
+  codec: number;
+  packetBytes: number;
+  sampled: boolean;
+  sampledAt: number | null;
+  levelDb: number | null;
+  thresholdDb: number;
+  overThreshold: boolean;
+  consecutiveLoudFrames: number;
+  requiredConsecutiveFrames: number;
+  triggered: boolean;
+  decodeError: boolean;
+  reason: DuckingDetectionReason;
 }
 
 /**
@@ -34,6 +61,7 @@ export class DuckingDetector {
   private now: () => number;
   private sampleIntervalMs: number;
   private requiredConsecutiveFrames: number;
+  private loudStreakTimeoutMs: number;
   private clientStates = new Map<number, ClientVoiceState>();
 
   constructor(options: DuckingDetectorOptions) {
@@ -43,16 +71,61 @@ export class DuckingDetector {
     this.sampleIntervalMs = options.sampleIntervalMs ?? SAMPLE_INTERVAL_MS;
     this.requiredConsecutiveFrames =
       options.requiredConsecutiveFrames ?? REQUIRED_CONSECUTIVE_FRAMES;
+    this.loudStreakTimeoutMs = options.loudStreakTimeoutMs ?? LOUD_STREAK_TIMEOUT_MS;
   }
 
   /**
    * Returns true when a sampled packet is loud for enough consecutive frames
    */
   shouldTrigger(packet: TS3VoiceData, settings: DuckingSettings): boolean {
-    const state = this.getClientState(packet.clientId);
+    return this.analyzePacket(packet, settings).triggered;
+  }
+
+  analyzePacket(packet: TS3VoiceData, settings: DuckingSettings): DuckingDetectionResult {
     const now = this.now();
+    const thresholdDb = clampThresholdDb(settings.thresholdDb);
+    if (packet.codec !== CODEC_OPUS_VOICE && packet.codec !== CODEC_OPUS_MUSIC) {
+      return {
+        clientId: packet.clientId,
+        codec: packet.codec,
+        packetBytes: packet.data.length,
+        sampled: false,
+        sampledAt: null,
+        levelDb: null,
+        thresholdDb,
+        overThreshold: false,
+        consecutiveLoudFrames: 0,
+        requiredConsecutiveFrames: this.requiredConsecutiveFrames,
+        triggered: false,
+        decodeError: false,
+        reason: "unsupported-codec",
+      };
+    }
+
+    const state = this.getClientState(packet.clientId);
+    const baseResult = {
+      clientId: packet.clientId,
+      codec: packet.codec,
+      packetBytes: packet.data.length,
+      sampledAt: null,
+      levelDb: null,
+      thresholdDb,
+      overThreshold: false,
+      consecutiveLoudFrames: state.consecutiveLoudFrames,
+      requiredConsecutiveFrames: this.requiredConsecutiveFrames,
+      triggered: false,
+      decodeError: false,
+    };
+
     if (now - state.lastSampleAt < this.sampleIntervalMs) {
-      return false;
+      return {
+        ...baseResult,
+        sampled: false,
+        reason: "throttled",
+      };
+    }
+    if (now - state.lastSampleAt > this.loudStreakTimeoutMs) {
+      state.consecutiveLoudFrames = 0;
     }
     state.lastSampleAt = now;
 
@@ -61,17 +134,42 @@ export class DuckingDetector {
       pcm = state.encoder.decode(Buffer.from(packet.data));
     } catch (err) {
       this.logger.debug({ err, clientId: packet.clientId }, "Ignoring undecodable voice packet for ducking");
-      return false;
+      state.consecutiveLoudFrames = 0;
+      return {
+        ...baseResult,
+        sampled: true,
+        sampledAt: now,
+        consecutiveLoudFrames: state.consecutiveLoudFrames,
+        decodeError: true,
+        reason: "decode-error",
+      };
     }
 
     const levelDb = calculatePcmRmsDb(pcm);
-    if (levelDb >= clampThresholdDb(settings.thresholdDb)) {
+    if (levelDb >= thresholdDb) {
       state.consecutiveLoudFrames++;
-      return state.consecutiveLoudFrames >= this.requiredConsecutiveFrames;
+      const triggered = state.consecutiveLoudFrames >= this.requiredConsecutiveFrames;
+      return {
+        ...baseResult,
+        sampled: true,
+        sampledAt: now,
+        levelDb,
+        overThreshold: true,
+        consecutiveLoudFrames: state.consecutiveLoudFrames,
+        triggered,
+        reason: triggered ? "triggered" : "over-threshold",
+      };
     }
 
     state.consecutiveLoudFrames = 0;
-    return false;
+    return {
+      ...baseResult,
+      sampled: true,
+      sampledAt: now,
+      levelDb,
+      consecutiveLoudFrames: state.consecutiveLoudFrames,
+      reason: "below-threshold",
+    };
   }
 
   /**
@@ -108,7 +206,7 @@ export function calculatePcmRmsDb(pcm: Buffer): number {
   let squareSum = 0;
   let samples = 0;
 
-    // Calculate RMS over all 16-bit little-endian PCM samples in the frame
+  // Calculate RMS over all 16-bit little-endian PCM samples in the frame
   for (let i = 0; i + 1 < pcm.length; i += 2) {
     const normalized = pcm.readInt16LE(i) / 32768;
     squareSum += normalized * normalized;
