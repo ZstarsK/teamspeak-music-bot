@@ -35,6 +35,7 @@ const TRACK_END_GRACE_SECONDS = 1.5;
 const TRACK_END_STALL_MS = 2000;
 const SPOTIFY_TRACK_END_GRACE_SECONDS = 0.35;
 const SPOTIFY_TRACK_END_STALL_MS = 15_000;
+const SPOTIFY_PROFILE_FIRST_FRAME_WAIT_MS = 15_000;
 
 export function shouldForceTrackAdvance(params: {
   playerState: "idle" | "playing" | "paused";
@@ -129,6 +130,7 @@ export class BotInstance extends EventEmitter {
   private lastVoicePacketAt = 0;
   private forcedAdvanceToken: string | null = null;
   private duckingSettings: DuckingSettings;
+  private profileUpdateToken = 0;
 
   constructor(options: BotInstanceOptions) {
     super();
@@ -545,9 +547,7 @@ export class BotInstance extends EventEmitter {
           platform: song.platform,
           coverUrl: song.coverUrl,
         });
-        this.profileManager.onSongChange(song).catch((err) => {
-          this.logger.warn({ err }, "Profile update failed after Spotify song change");
-        });
+        this.scheduleSpotifyProfileUpdateAfterAudioStarts(song);
         this.emit("stateChange");
         return true;
       }
@@ -580,6 +580,7 @@ export class BotInstance extends EventEmitter {
         coverUrl: song.coverUrl,
       });
       // Update bot presence (fire-and-forget — never blocks playback)
+      this.profileUpdateToken++;
       this.profileManager.onSongChange(song).catch((err) => {
         this.logger.warn({ err }, "Profile update failed after song change");
       });
@@ -589,6 +590,35 @@ export class BotInstance extends EventEmitter {
       this.logger.error({ err, songId: song.id }, "Failed to resolve URL");
       return false;
     }
+  }
+
+  private scheduleSpotifyProfileUpdateAfterAudioStarts(song: QueuedSong): void {
+    const token = ++this.profileUpdateToken;
+    const requestedAt = Date.now();
+    this.player.waitForNextFrame(SPOTIFY_PROFILE_FIRST_FRAME_WAIT_MS)
+      .then((gotFrame) => {
+        const current = this.queue.current();
+        if (
+          token !== this.profileUpdateToken ||
+          !current ||
+          current.platform !== "spotify" ||
+          current.id !== song.id
+        ) {
+          this.logger.debug(
+            { songId: song.id, currentSongId: current?.id, token, activeToken: this.profileUpdateToken },
+            "Skipping stale delayed Spotify profile update",
+          );
+          return;
+        }
+        this.logger.info(
+          { songId: song.id, waitedMs: Date.now() - requestedAt, gotFrame },
+          "Starting Spotify profile update after audio start wait",
+        );
+        return this.profileManager.onSongChange(song);
+      })
+      .catch((err) => {
+        this.logger.warn({ err, songId: song.id }, "Profile update failed after Spotify song change");
+      });
   }
 
   private async cmdPlay(cmd: ParsedCommand): Promise<string> {

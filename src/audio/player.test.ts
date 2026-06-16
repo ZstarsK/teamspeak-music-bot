@@ -1,5 +1,5 @@
 import { PassThrough } from "node:stream";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { AudioPlayer } from "./player.js";
 import { getDefaultDuckingSettings } from "../data/config.js";
 
@@ -127,5 +127,36 @@ describe("AudioPlayer ducking", () => {
       reason: "closed",
     });
     expect(typeof events[0].elapsed).toBe("number");
+  });
+
+  it("waits for a future audio frame without waiting for old frames", async () => {
+    vi.useFakeTimers();
+    const player = new AudioPlayer(logger);
+    (player as any).lastFrameAt = 1000;
+
+    let resolved = false;
+    const wait = player.waitForNextFrame(500).then(() => {
+      resolved = true;
+    });
+    await vi.advanceTimersByTimeAsync(200);
+    expect(resolved).toBe(false);
+
+    (player as any).lastFrameAt = Date.now();
+    await vi.advanceTimersByTimeAsync(50);
+    await wait;
+
+    expect(resolved).toBe(true);
+    vi.useRealTimers();
+  });
+
+  it("stops waiting for a future audio frame after timeout", async () => {
+    vi.useFakeTimers();
+    const player = new AudioPlayer(logger);
+
+    const wait = player.waitForNextFrame(500);
+    await vi.advanceTimersByTimeAsync(500);
+
+    await expect(wait).resolves.toBe(false);
+    vi.useRealTimers();
   });
 });

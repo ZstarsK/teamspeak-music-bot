@@ -25,6 +25,7 @@ const SPOTIFY_SCOPE = [
   "user-modify-playback-state",
   "user-read-playback-state",
 ].join(" ");
+const SPOTIFY_API_SLOW_REQUEST_MS = 1_500;
 
 export interface SpotifyAccountRecord extends StoredSpotifyAccount {}
 
@@ -258,6 +259,8 @@ export class SpotifyProvider implements MusicProvider {
 
   private async request<T>(path: string, accountId?: string, config: Record<string, any> = {}): Promise<T> {
     const account = await this.getPlaybackAccount(accountId);
+    const method = String(config.method ?? "GET").toUpperCase();
+    const requestStartedAt = Date.now();
     try {
       const res = await this.api.request({
         url: path,
@@ -267,10 +270,14 @@ export class SpotifyProvider implements MusicProvider {
           Authorization: `${account.tokenType} ${account.accessToken}`,
         },
       });
+      this.logApiRequestTiming(path, method, res.status, Date.now() - requestStartedAt, false);
       return res.data as T;
     } catch (err: any) {
-      if (err?.response?.status !== 401) throw err;
+      const status = err?.response?.status;
+      this.logApiRequestTiming(path, method, status, Date.now() - requestStartedAt, false, err?.code);
+      if (status !== 401) throw err;
       const fresh = await this.ensureFreshAccount(account.id);
+      const retryStartedAt = Date.now();
       const res = await this.api.request({
         url: path,
         ...config,
@@ -279,8 +286,24 @@ export class SpotifyProvider implements MusicProvider {
           Authorization: `${fresh.tokenType} ${fresh.accessToken}`,
         },
       });
+      this.logApiRequestTiming(path, method, res.status, Date.now() - retryStartedAt, true);
       return res.data as T;
     }
+  }
+
+  private logApiRequestTiming(
+    path: string,
+    method: string,
+    status: number | undefined,
+    elapsedMs: number,
+    retry: boolean,
+    code?: string,
+  ): void {
+    if (elapsedMs < SPOTIFY_API_SLOW_REQUEST_MS && status !== undefined && status < 500 && !code) return;
+    this.logger.warn(
+      { path, method, status, elapsedMs, retry, ...(code ? { code } : {}) },
+      "Spotify API request was slow or failed",
+    );
   }
 
   private async validateAccount(accountId?: string): Promise<boolean> {

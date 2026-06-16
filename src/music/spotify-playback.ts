@@ -13,10 +13,11 @@ import { SpotifyProvider, type SpotifyAccountRecord } from "./spotify.js";
 import {
   decideSpotifyEndOfTrack,
   decideSpotifySourceClose,
+  getSpotifyEndWaitMaxMs,
+  getSpotifyEndWaitPollMs,
   getSpotifyLocalTrackEndRemainingMs,
   isGracefulSpotifySourceClose,
   SPOTIFY_EARLY_END_REWIND_MS,
-  SPOTIFY_END_WAIT_MAX_MS,
   SPOTIFY_END_WAIT_POLL_MS,
   SPOTIFY_HARD_RECOVERY_MAX_ATTEMPTS,
   SPOTIFY_SOURCE_RECOVERY_DELAY_MS,
@@ -34,6 +35,7 @@ const PCM_TARGET_STABLE_MS = 360;
 const LIBRESPOT_EVENT_POLL_INTERVAL_MS = 80;
 const LIBRESPOT_EVENT_RETENTION = 200;
 const LIBRESPOT_BITRATE = "160";
+const LOCAL_AUDIO_START_OBSERVE_MS = 20_000;
 
 export interface SpotifyLibrespotEvent {
   PLAYER_EVENT?: string;
@@ -313,7 +315,9 @@ export class SpotifyPlaybackEngine {
   }
 
   async play(song: Song, player: AudioPlayer, onEnd: () => void | Promise<void>): Promise<void> {
+    const playRequestedAt = Date.now();
     const account = await this.provider.getPlaybackAccount(song.accountId);
+    const accountResolveElapsedMs = Date.now() - playRequestedAt;
     const trackUri = this.provider.getTrackUri(song.id);
     this.cancelPendingTrackEnd();
     const command = this.session.beginPlay({
@@ -326,14 +330,33 @@ export class SpotifyPlaybackEngine {
     this.playbackCommandId = commandId;
     const playerState = player.getState();
     let sameProcess = Boolean(this.librespot && !this.librespot.killed && this.activeAccountId === account.id);
+    this.logger.info(
+      { commandId, trackUri, trackId: song.id, sameProcess, playerState, accountResolveElapsedMs },
+      "Spotify playback command started",
+    );
+    const ensureProcessStartedAt = Date.now();
     await this.ensureProcess(account);
+    const ensureProcessElapsedMs = Date.now() - ensureProcessStartedAt;
     if (this.isStaleCommand(commandId, "Spotify play superseded after sidecar start", { trackUri })) {
       return;
     }
+    const deviceWaitStartedAt = Date.now();
     const deviceId = await this.waitForDeviceWithPassthroughFallback(account, commandId);
+    const deviceWaitElapsedMs = Date.now() - deviceWaitStartedAt;
     if (!deviceId || this.isStaleCommand(commandId, "Spotify play superseded after device wait", { trackUri })) {
       return;
     }
+    this.logger.info(
+      {
+        commandId,
+        trackUri,
+        outputMode: this.currentOutputMode,
+        ensureProcessElapsedMs,
+        deviceWaitElapsedMs,
+        deviceId,
+      },
+      "Spotify sidecar and device ready",
+    );
     this.session.setActiveTrack({
       trackUri,
       trackId: song.id,
@@ -399,6 +422,7 @@ export class SpotifyPlaybackEngine {
           const transitionStartedAt = Date.now();
           const transitionDeadline = transitionStartedAt + PCM_TARGET_WAIT_TIMEOUT_MS;
           const signal = this.createControlSignal();
+          const startPlaybackStartedAt = Date.now();
           const started = await this.runControlRequest(
             signal,
             () => this.provider.startPlayback({
@@ -410,6 +434,7 @@ export class SpotifyPlaybackEngine {
             "Spotify startPlayback aborted for superseded PCM switch",
             { trackUri },
           );
+          const startPlaybackElapsedMs = Date.now() - startPlaybackStartedAt;
           if (
             !started ||
             this.isStalePlaybackContext(commandId, trackUri, song.id, "Spotify play superseded after startPlayback")
@@ -418,6 +443,10 @@ export class SpotifyPlaybackEngine {
           }
           this.playbackStarted = true;
           this.activePlaybackStartedAt = Date.now();
+          this.logger.info(
+            { commandId, trackUri, outputMode: this.currentOutputMode, startPlaybackElapsedMs },
+            "Spotify startPlayback accepted",
+          );
           const confirmed = await this.waitForTargetPlayback(account.id, deviceId, song.id, undefined, transitionDeadline);
           if (this.isStalePlaybackContext(commandId, trackUri, song.id, "Spotify play superseded after target confirmation")) {
             return;
@@ -448,6 +477,7 @@ export class SpotifyPlaybackEngine {
         await this.withTransition(async () => {
           this.session.setState("switching");
           const signal = this.createControlSignal();
+          const startPlaybackStartedAt = Date.now();
           const started = await this.runControlRequest(
             signal,
             () => this.provider.startPlayback({
@@ -459,6 +489,7 @@ export class SpotifyPlaybackEngine {
             "Spotify startPlayback aborted for superseded encoded switch",
             { trackUri },
           );
+          const startPlaybackElapsedMs = Date.now() - startPlaybackStartedAt;
           if (
             !started ||
             this.isStalePlaybackContext(commandId, trackUri, song.id, "Spotify play superseded after encoded startPlayback")
@@ -467,11 +498,16 @@ export class SpotifyPlaybackEngine {
           }
           this.playbackStarted = true;
           this.activePlaybackStartedAt = Date.now();
+          this.logger.info(
+            { commandId, trackUri, outputMode: this.currentOutputMode, startPlaybackElapsedMs },
+            "Spotify startPlayback accepted",
+          );
           startedCurrent = true;
           this.session.setState("playing");
         });
       } else {
         const signal = this.createControlSignal();
+        const startPlaybackStartedAt = Date.now();
         const started = await this.runControlRequest(
           signal,
           () => this.provider.startPlayback({
@@ -483,6 +519,7 @@ export class SpotifyPlaybackEngine {
           "Spotify startPlayback aborted for superseded play",
           { trackUri },
         );
+        const startPlaybackElapsedMs = Date.now() - startPlaybackStartedAt;
         if (
           !started ||
           this.isStalePlaybackContext(commandId, trackUri, song.id, "Spotify play superseded after startPlayback")
@@ -491,6 +528,10 @@ export class SpotifyPlaybackEngine {
         }
         this.playbackStarted = true;
         this.activePlaybackStartedAt = Date.now();
+        this.logger.info(
+          { commandId, trackUri, outputMode: this.currentOutputMode, startPlaybackElapsedMs },
+          "Spotify startPlayback accepted",
+        );
         startedCurrent = true;
         this.session.setState("playing");
       }
@@ -519,7 +560,17 @@ export class SpotifyPlaybackEngine {
     if (!startedCurrent) {
       return;
     }
-    this.logger.info({ trackUri, deviceId }, "Spotify playback started");
+    this.logger.info(
+      {
+        commandId,
+        trackUri,
+        deviceId,
+        outputMode: this.currentOutputMode,
+        elapsedMs: Date.now() - playRequestedAt,
+      },
+      "Spotify playback control completed",
+    );
+    this.observeLocalAudioStart(player, commandId, trackUri, song.id, playRequestedAt);
   }
 
   async pause(): Promise<void> {
@@ -922,9 +973,8 @@ export class SpotifyPlaybackEngine {
           duration,
           remainingMs,
         },
-        "Ignoring early Spotify end_of_track while local source is still playing",
+        "Deferring early Spotify end_of_track until local playback catches up",
       );
-      return true;
     }
     if (this.pendingTrackEndTimer) {
       this.logger.debug(
@@ -934,6 +984,7 @@ export class SpotifyPlaybackEngine {
       return true;
     }
 
+    const maxWaitMs = getSpotifyEndWaitMaxMs(decision);
     this.logger.info(
       {
         event,
@@ -942,6 +993,7 @@ export class SpotifyPlaybackEngine {
         elapsed: player.getElapsed(),
         duration,
         remainingMs,
+        maxWaitMs,
       },
       "Delaying Spotify end_of_track until local playback catches up",
     );
@@ -968,7 +1020,7 @@ export class SpotifyPlaybackEngine {
         this.pendingTrackEndTimer = setTimeout(check, SPOTIFY_END_WAIT_POLL_MS);
         return;
       }
-      if (remaining <= 0 || playerState === "idle" || waitedMs >= SPOTIFY_END_WAIT_MAX_MS) {
+      if (remaining <= 0 || playerState === "idle" || waitedMs >= maxWaitMs) {
         this.logger.info(
           {
             trackUri,
@@ -985,10 +1037,10 @@ export class SpotifyPlaybackEngine {
         return;
       }
 
-      this.pendingTrackEndTimer = setTimeout(check, Math.min(SPOTIFY_END_WAIT_POLL_MS, remaining));
+      this.pendingTrackEndTimer = setTimeout(check, getSpotifyEndWaitPollMs(remaining));
     };
 
-    this.pendingTrackEndTimer = setTimeout(check, Math.min(SPOTIFY_END_WAIT_POLL_MS, remainingMs));
+    this.pendingTrackEndTimer = setTimeout(check, getSpotifyEndWaitPollMs(remainingMs));
     return true;
   }
 
@@ -1184,6 +1236,40 @@ export class SpotifyPlaybackEngine {
     const cleanup = this.createPlaybackCleanup();
     const onSourceClosed = this.createSourceCloseHandler(song, player, onEnd, commandId);
     this.streamBridge.attachPlayer(player, { cleanup, onSourceClosed });
+  }
+
+  private observeLocalAudioStart(
+    player: AudioPlayer,
+    commandId: number,
+    trackUri: string,
+    trackId: string,
+    playRequestedAt: number,
+  ): void {
+    player.waitForNextFrame(LOCAL_AUDIO_START_OBSERVE_MS)
+      .then((gotFrame) => {
+        if (this.isStalePlaybackContext(commandId, trackUri, trackId, "Ignoring stale Spotify local audio start observation")) {
+          return;
+        }
+        const payload = {
+          commandId,
+          trackUri,
+          trackId,
+          outputMode: this.currentOutputMode,
+          gotFrame,
+          elapsedMs: Date.now() - playRequestedAt,
+          playerState: player.getState(),
+          playerElapsed: player.getElapsed(),
+          bufferedBytes: player.getBufferedAudioBytes(),
+        };
+        if (gotFrame) {
+          this.logger.info(payload, "Spotify local audio start observed");
+        } else {
+          this.logger.warn(payload, "Spotify local audio did not start before observation timeout");
+        }
+      })
+      .catch((err) => {
+        this.logger.warn({ err, commandId, trackUri, trackId }, "Failed to observe Spotify local audio start");
+      });
   }
 
   private createPlaybackCleanup(): () => void {

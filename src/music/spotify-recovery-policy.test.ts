@@ -2,7 +2,13 @@ import { describe, expect, it } from "vitest";
 import {
   decideSpotifyEndOfTrack,
   decideSpotifySourceClose,
+  getSpotifyEndWaitMaxMs,
+  getSpotifyEndWaitPollMs,
   isGracefulSpotifySourceClose,
+  SPOTIFY_END_WAIT_EARLY_EXTRA_MS,
+  SPOTIFY_END_WAIT_LONG_POLL_MS,
+  SPOTIFY_END_WAIT_MAX_MS,
+  SPOTIFY_END_WAIT_POLL_MS,
 } from "./spotify-recovery-policy.js";
 
 describe("SpotifyRecoveryPolicy", () => {
@@ -37,6 +43,24 @@ describe("SpotifyRecoveryPolicy", () => {
     });
 
     expect(decision.action).toBe("complete");
+  });
+
+  it("waits for early end_of_track long enough for local playback to finish", () => {
+    const decision = decideSpotifyEndOfTrack({
+      durationSeconds: 286,
+      elapsedSeconds: 241.44,
+      playerState: "playing",
+    });
+
+    expect(decision.action).toBe("ignore");
+    expect(getSpotifyEndWaitMaxMs(decision)).toBeGreaterThanOrEqual(decision.remainingMs + SPOTIFY_END_WAIT_EARLY_EXTRA_MS);
+    expect(getSpotifyEndWaitMaxMs(decision)).toBeGreaterThan(SPOTIFY_END_WAIT_MAX_MS);
+  });
+
+  it("uses a coarse poll while far from the local end and a tight poll near the end", () => {
+    expect(getSpotifyEndWaitPollMs(44_000)).toBe(SPOTIFY_END_WAIT_LONG_POLL_MS);
+    expect(getSpotifyEndWaitPollMs(2_000)).toBe(SPOTIFY_END_WAIT_POLL_MS);
+    expect(getSpotifyEndWaitPollMs(50)).toBe(50);
   });
 
   it("recovers a real source close when the local track still has audio left", () => {

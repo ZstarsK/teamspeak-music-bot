@@ -6,7 +6,10 @@ export const SPOTIFY_HARD_RECOVERY_MAX_ATTEMPTS = 1;
 export const SPOTIFY_SOURCE_FAILURE_RECOVERY_THRESHOLD_MS = 1_000;
 export const SPOTIFY_END_LOCAL_GRACE_SECONDS = 0.35;
 export const SPOTIFY_END_WAIT_POLL_MS = 120;
+export const SPOTIFY_END_WAIT_LONG_POLL_MS = 5_000;
+export const SPOTIFY_END_WAIT_NEAR_END_WINDOW_MS = 5_000;
 export const SPOTIFY_END_WAIT_MAX_MS = 30_000;
+export const SPOTIFY_END_WAIT_EARLY_EXTRA_MS = 5_000;
 export const SPOTIFY_EARLY_END_IGNORE_THRESHOLD_MS = 10_000;
 export const SPOTIFY_EARLY_END_REWIND_MS = 700;
 
@@ -51,6 +54,23 @@ export function decideSpotifyEndOfTrack(params: {
     return { action: "ignore", remainingMs };
   }
   return { action: "delay", remainingMs };
+}
+
+export function getSpotifyEndWaitMaxMs(decision: SpotifyEndOfTrackDecision): number {
+  if (decision.action !== "ignore") {
+    return SPOTIFY_END_WAIT_MAX_MS;
+  }
+  return Math.max(SPOTIFY_END_WAIT_MAX_MS, decision.remainingMs + SPOTIFY_END_WAIT_EARLY_EXTRA_MS);
+}
+
+export function getSpotifyEndWaitPollMs(remainingMs: number): number {
+  if (!Number.isFinite(remainingMs) || remainingMs <= 0) {
+    return SPOTIFY_END_WAIT_POLL_MS;
+  }
+  if (remainingMs > SPOTIFY_END_WAIT_NEAR_END_WINDOW_MS) {
+    return Math.min(SPOTIFY_END_WAIT_LONG_POLL_MS, remainingMs - SPOTIFY_END_WAIT_NEAR_END_WINDOW_MS);
+  }
+  return Math.max(1, Math.min(SPOTIFY_END_WAIT_POLL_MS, remainingMs));
 }
 
 export function isGracefulSpotifySourceClose(event: SpotifySourceCloseLike): boolean {

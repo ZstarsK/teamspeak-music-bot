@@ -85,7 +85,7 @@ export interface PlayerEvents {
 }
 
 export type PlayerState = "idle" | "playing" | "paused";
-export type ExternallyControlledSourceCloseReason = "closed" | "no-data";
+export type ExternallyControlledSourceCloseReason = "closed" | "no-data" | "stalled";
 
 export interface ExternallyControlledSourceCloseEvent {
   source: string;
@@ -105,6 +105,7 @@ const PCM_SAMPLE_BLOCK_BYTES = 4; // 16-bit stereo
 const ENCODED_STREAM_INITIAL_BUFFER_BYTES = PCM_FRAME_BYTES * 50; // 1s of decoded 48kHz stereo PCM
 const ENCODED_STREAM_REBUFFER_BYTES = PCM_FRAME_BYTES * 75; // 1.5s of decoded 48kHz stereo PCM
 const ENCODED_STREAM_NO_DATA_TIMEOUT_MS = 15_000;
+const ENCODED_STREAM_REBUFFER_STALL_TIMEOUT_MS = 8_000;
 
 export interface AudioPlayerOptions {
   maxVolume?: number;
@@ -339,6 +340,7 @@ export class AudioPlayer extends EventEmitter {
     this.suppressTrackEnd = options.suppressTrackEnd === true;
     let sourceFailureReported = false;
     let sourceCloseReported = false;
+    let lastPcmDataAt = 0;
     const reportSuppressedSourceFailure = (err: Error): void => {
       if (sourceFailureReported) return;
       sourceFailureReported = true;
@@ -425,7 +427,45 @@ export class AudioPlayer extends EventEmitter {
         this.emit("error", err);
       }, noDataTimeoutMs)
       : null;
+    let rebufferStallTimer: ReturnType<typeof setInterval> | null = null;
+    if (options.source === "encoded-stream") {
+      rebufferStallTimer = setInterval(() => {
+        if (this.sessionId !== playSessionId) {
+          if (rebufferStallTimer) clearInterval(rebufferStallTimer);
+          return;
+        }
+        if (!this.suppressTrackEnd || !this.rebuffering || !this.ffmpeg || lastPcmDataAt <= 0) return;
+        const stalledMs = Date.now() - lastPcmDataAt;
+        if (stalledMs < ENCODED_STREAM_REBUFFER_STALL_TIMEOUT_MS) return;
+        const err = new Error(`No PCM data received from ${options.source} while rebuffering`);
+        this.logger.warn(
+          {
+            source: options.source,
+            input: options.display,
+            stalledMs,
+            bufferedBytes: this.getBufferedAudioBytes(),
+            targetBytes: this.rebufferTargetBytes,
+            elapsed: this.getElapsed(),
+          },
+          "Playback stream stalled while rebuffering",
+        );
+        this.spawnFailed = true;
+        reportSuppressedSourceClose({
+          source: options.source,
+          input: options.display,
+          code: null,
+          signal: null,
+          gotData: gotFirstData,
+          framesPlayed: this.framesPlayed,
+          elapsed: this.getElapsed(),
+          reason: "stalled",
+        });
+        reportSuppressedSourceFailure(err);
+        this.ffmpeg?.kill("SIGTERM");
+      }, 1000);
+    }
     this.ffmpeg.stdout!.on("data", (chunk: Buffer) => {
+      lastPcmDataAt = Date.now();
       if (!gotFirstData) {
         gotFirstData = true;
         if (noDataTimer) clearTimeout(noDataTimer);
@@ -461,6 +501,7 @@ export class AudioPlayer extends EventEmitter {
 
     this.ffmpeg.on("close", (code, signal) => {
       if (noDataTimer) clearTimeout(noDataTimer);
+      if (rebufferStallTimer) clearInterval(rebufferStallTimer);
       this.logger.info({ exitCode: code, signal, gotData: gotFirstData, framesPlayed: this.framesPlayed }, "FFmpeg process closed");
       if (
         this.sessionId === playSessionId &&
@@ -785,5 +826,38 @@ export class AudioPlayer extends EventEmitter {
 
   getLastFrameAt(): number {
     return this.lastFrameAt;
+  }
+
+  waitForNextFrame(timeoutMs: number): Promise<boolean> {
+    const startedFrameAt = this.lastFrameAt;
+    const deadline = Date.now() + Math.max(0, timeoutMs);
+    return new Promise((resolve) => {
+      let done = false;
+      let timer: ReturnType<typeof setTimeout> | null = null;
+
+      const finish = (result: boolean): void => {
+        if (done) return;
+        done = true;
+        if (timer) clearTimeout(timer);
+        this.off("frame", onFrame);
+        resolve(result);
+      };
+
+      const poll = (): void => {
+        if (this.lastFrameAt > startedFrameAt) {
+          finish(true);
+          return;
+        }
+        if (Date.now() >= deadline) {
+          finish(false);
+          return;
+        }
+        timer = setTimeout(poll, Math.min(50, deadline - Date.now()));
+      };
+
+      const onFrame = (): void => finish(true);
+      this.on("frame", onFrame);
+      poll();
+    });
   }
 }
