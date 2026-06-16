@@ -106,6 +106,7 @@ const ENCODED_STREAM_INITIAL_BUFFER_BYTES = PCM_FRAME_BYTES * 50; // 1s of decod
 const ENCODED_STREAM_REBUFFER_BYTES = PCM_FRAME_BYTES * 75; // 1.5s of decoded 48kHz stereo PCM
 const ENCODED_STREAM_NO_DATA_TIMEOUT_MS = 15_000;
 const ENCODED_STREAM_REBUFFER_STALL_TIMEOUT_MS = 8_000;
+const FFMPEG_FORCE_KILL_TIMEOUT_MS = 1_500;
 
 export interface AudioPlayerOptions {
   maxVolume?: number;
@@ -113,6 +114,8 @@ export interface AudioPlayerOptions {
 
 export class AudioPlayer extends EventEmitter {
   private ffmpeg: ChildProcess | null = null;
+  private ffmpegProcesses = new Set<ChildProcess>();
+  private ffmpegKillTimers = new Map<ChildProcess, ReturnType<typeof setTimeout>>();
   private encoder: Encoder;
   private state: PlayerState = "idle";
   private volume = DEFAULT_VOLUME;
@@ -374,11 +377,13 @@ export class AudioPlayer extends EventEmitter {
 
     const ffmpegBin = getFfmpegCommand();
     this.logger.info({ ffmpeg: ffmpegBin }, "Using ffmpeg binary");
-    this.ffmpeg = spawn(ffmpegBin, args, { stdio: [options.stdin ? "pipe" : "ignore", "pipe", "pipe"] });
+    const ffmpeg = spawn(ffmpegBin, args, { stdio: [options.stdin ? "pipe" : "ignore", "pipe", "pipe"] });
+    this.ffmpeg = ffmpeg;
+    this.ffmpegProcesses.add(ffmpeg);
 
     // Prevent stream errors from crashing the process
-    if (options.stdin && this.ffmpeg.stdin) {
-      const ffmpegStdin = this.ffmpeg.stdin;
+    if (options.stdin && ffmpeg.stdin) {
+      const ffmpegStdin = ffmpeg.stdin;
       (options.stdin as any).unpipe?.();
       options.stdin.on("error", (err) => {
         this.logger.warn({ err }, "PCM input stream error");
@@ -388,10 +393,10 @@ export class AudioPlayer extends EventEmitter {
       });
       options.stdin.pipe(ffmpegStdin);
     }
-    this.ffmpeg.stdout!.on("error", (err) => {
+    ffmpeg.stdout!.on("error", (err) => {
       this.logger.warn({ err }, "FFmpeg stdout error");
     });
-    this.ffmpeg.stderr!.on("error", (err) => {
+    ffmpeg.stderr!.on("error", (err) => {
       this.logger.warn({ err }, "FFmpeg stderr error");
     });
 
@@ -408,7 +413,7 @@ export class AudioPlayer extends EventEmitter {
         const err = new Error(`No PCM data received from ${options.source}`);
         this.logger.warn({ source: options.source, input: options.display }, "No PCM data received after playback start");
         this.spawnFailed = true;
-        this.ffmpeg?.kill("SIGTERM");
+        this.terminateFfmpegProcess(ffmpeg, "no-data");
         if (this.suppressTrackEnd) {
           this.logger.warn({ source: options.source }, "Suppressing no-data error for externally controlled playback source");
           reportSuppressedSourceClose({
@@ -461,10 +466,11 @@ export class AudioPlayer extends EventEmitter {
           reason: "stalled",
         });
         reportSuppressedSourceFailure(err);
-        this.ffmpeg?.kill("SIGTERM");
+        this.terminateFfmpegProcess(ffmpeg, "rebuffer-stall");
       }, 1000);
     }
-    this.ffmpeg.stdout!.on("data", (chunk: Buffer) => {
+    ffmpeg.stdout!.on("data", (chunk: Buffer) => {
+      if (this.sessionId !== playSessionId || ffmpeg !== this.ffmpeg) return;
       lastPcmDataAt = Date.now();
       if (!gotFirstData) {
         gotFirstData = true;
@@ -493,15 +499,16 @@ export class AudioPlayer extends EventEmitter {
         );
       }
       // Backpressure: pause FFmpeg stdout when buffer is too large
-      if (this.pcmBuffer.length > AudioPlayer.BUFFER_HIGH_WATER && !this.ffmpegPaused && this.ffmpeg?.stdout) {
-        this.ffmpeg.stdout.pause();
+      if (this.pcmBuffer.length > AudioPlayer.BUFFER_HIGH_WATER && !this.ffmpegPaused && ffmpeg === this.ffmpeg && ffmpeg.stdout) {
+        ffmpeg.stdout.pause();
         this.ffmpegPaused = true;
       }
     });
 
-    this.ffmpeg.on("close", (code, signal) => {
+    ffmpeg.on("close", (code, signal) => {
       if (noDataTimer) clearTimeout(noDataTimer);
       if (rebufferStallTimer) clearInterval(rebufferStallTimer);
+      this.forgetFfmpegProcess(ffmpeg);
       this.logger.info({ exitCode: code, signal, gotData: gotFirstData, framesPlayed: this.framesPlayed }, "FFmpeg process closed");
       if (
         this.sessionId === playSessionId &&
@@ -526,8 +533,9 @@ export class AudioPlayer extends EventEmitter {
       }
     });
 
-    this.ffmpeg.on("error", (err) => {
+    ffmpeg.on("error", (err) => {
       this.logger.error({ err }, "FFmpeg error");
+      this.forgetFfmpegProcess(ffmpeg);
       if (this.sessionId === playSessionId) {
         this.spawnFailed = true;
         this.consecutiveFailures++;
@@ -536,7 +544,7 @@ export class AudioPlayer extends EventEmitter {
     });
 
     // Log FFmpeg stderr at info level for debugging playback issues
-    this.ffmpeg.stderr!.on("data", (data: Buffer) => {
+    ffmpeg.stderr!.on("data", (data: Buffer) => {
       const msg = data.toString().trimEnd();
       // Log important FFmpeg messages at info level
       if (msg.includes("Error") || msg.includes("error") || msg.includes("HTTP") || msg.includes("Opening") || msg.includes("Stream")) {
@@ -769,7 +777,7 @@ export class AudioPlayer extends EventEmitter {
     this.sessionId++;
     this.frameLoopRunning = false;
     if (this.ffmpeg) {
-      this.ffmpeg.kill("SIGTERM");
+      this.terminateFfmpegProcess(this.ffmpeg, "stop");
       this.ffmpeg = null;
     }
     const cleanup = options.skipCleanup ? null : this.cleanupCurrentSource;
@@ -794,6 +802,41 @@ export class AudioPlayer extends EventEmitter {
     this.rebuffering = false;
     this.rebufferTargetBytes = 0;
     this.suppressTrackEnd = false;
+  }
+
+  private terminateFfmpegProcess(process: ChildProcess, reason: string): void {
+    if (!this.ffmpegProcesses.has(process)) return;
+
+    // Close all stdio streams first so pipe-based ffmpeg inputs can observe EOF.
+    process.stdin?.destroy();
+    process.stdout?.destroy();
+    process.stderr?.destroy();
+
+    if (process.exitCode === null && process.signalCode === null && !process.killed) {
+      process.kill("SIGTERM");
+    }
+
+    if (!this.ffmpegKillTimers.has(process)) {
+      const timer = setTimeout(() => {
+        if (!this.ffmpegProcesses.has(process)) return;
+        if (process.exitCode === null && process.signalCode === null) {
+          this.logger.warn({ pid: process.pid, reason }, "Force killing stuck FFmpeg process");
+          process.kill("SIGKILL");
+        }
+      }, FFMPEG_FORCE_KILL_TIMEOUT_MS);
+      timer.unref?.();
+      this.ffmpegKillTimers.set(process, timer);
+    }
+  }
+
+  private forgetFfmpegProcess(process: ChildProcess): void {
+    this.ffmpegProcesses.delete(process);
+    const timer = this.ffmpegKillTimers.get(process);
+    if (timer) clearTimeout(timer);
+    this.ffmpegKillTimers.delete(process);
+    if (this.ffmpeg === process) {
+      this.ffmpeg = null;
+    }
   }
 
   /** Reset the consecutive failure counter (e.g. after user action) */

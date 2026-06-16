@@ -1,4 +1,5 @@
 import { PassThrough } from "node:stream";
+import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import { AudioPlayer } from "./player.js";
 import { getDefaultDuckingSettings } from "../data/config.js";
@@ -19,6 +20,27 @@ function peakSample(pcm: Buffer): number {
     peak = Math.max(peak, Math.abs(pcm.readInt16LE(i)));
   }
   return peak;
+}
+
+function mockFfmpegProcess() {
+  const process = new EventEmitter() as any;
+  process.stdin = { destroy: vi.fn() };
+  process.stdout = { destroy: vi.fn() };
+  process.stderr = { destroy: vi.fn() };
+  process.exitCode = null;
+  process.signalCode = null;
+  process.killed = false;
+  process.pid = 1234;
+  process.kill = vi.fn((signal: NodeJS.Signals) => {
+    if (signal === "SIGTERM") {
+      process.killed = true;
+    }
+    if (signal === "SIGKILL") {
+      process.signalCode = "SIGKILL";
+    }
+    return true;
+  });
+  return process;
 }
 
 describe("AudioPlayer ducking", () => {
@@ -157,6 +179,39 @@ describe("AudioPlayer ducking", () => {
     await vi.advanceTimersByTimeAsync(500);
 
     await expect(wait).resolves.toBe(false);
+    vi.useRealTimers();
+  });
+
+  it("force kills a stopped ffmpeg process that does not close", async () => {
+    vi.useFakeTimers();
+    const player = new AudioPlayer(logger);
+    const ffmpeg = mockFfmpegProcess();
+    (player as any).ffmpeg = ffmpeg;
+    (player as any).ffmpegProcesses.add(ffmpeg);
+
+    player.stop();
+
+    expect(ffmpeg.stdin.destroy).toHaveBeenCalled();
+    expect(ffmpeg.stdout.destroy).toHaveBeenCalled();
+    expect(ffmpeg.stderr.destroy).toHaveBeenCalled();
+    expect(ffmpeg.kill).toHaveBeenCalledWith("SIGTERM");
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(ffmpeg.kill).toHaveBeenCalledWith("SIGKILL");
+    vi.useRealTimers();
+  });
+
+  it("does not force kill ffmpeg after the close handler forgets it", async () => {
+    vi.useFakeTimers();
+    const player = new AudioPlayer(logger);
+    const ffmpeg = mockFfmpegProcess();
+    (player as any).ffmpegProcesses.add(ffmpeg);
+
+    (player as any).terminateFfmpegProcess(ffmpeg, "test");
+    (player as any).forgetFfmpegProcess(ffmpeg);
+    await vi.advanceTimersByTimeAsync(1500);
+
+    expect(ffmpeg.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(ffmpeg.kill).not.toHaveBeenCalledWith("SIGKILL");
     vi.useRealTimers();
   });
 });
