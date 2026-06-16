@@ -34,6 +34,7 @@ export interface BotInstance {
   duckingEnabled: boolean;
   duckingVolumePercent: number;
   duckingRecoveryMs: number;
+  duckingThresholdDb: number;
   identity?: string;
 }
 
@@ -92,6 +93,9 @@ function migrateSchema(db: Database.Database): void {
   if (!names.includes("duckingRecoveryMs")) {
     db.exec(`ALTER TABLE bot_instances ADD COLUMN duckingRecoveryMs INTEGER NOT NULL DEFAULT ${defaultDucking.recoveryMs}`);
   }
+  if (!names.includes("duckingThresholdDb")) {
+    db.exec(`ALTER TABLE bot_instances ADD COLUMN duckingThresholdDb INTEGER NOT NULL DEFAULT ${defaultDucking.thresholdDb}`);
+  }
   // Profile feature flags
   const profileCols = [
     "profile_avatar_enabled",
@@ -138,6 +142,7 @@ function initTables(db: Database.Database): void {
       duckingEnabled INTEGER NOT NULL DEFAULT ${defaultDucking.enabled ? 1 : 0},
       duckingVolumePercent INTEGER NOT NULL DEFAULT ${defaultDucking.volumePercent},
       duckingRecoveryMs INTEGER NOT NULL DEFAULT ${defaultDucking.recoveryMs},
+      duckingThresholdDb INTEGER NOT NULL DEFAULT ${defaultDucking.thresholdDb},
       identity TEXT
     );
   `);
@@ -159,8 +164,8 @@ export function createDatabase(dbPath: string): BotDatabase {
   `);
 
   const upsertInstance = db.prepare(`
-    INSERT INTO bot_instances (id, name, serverAddress, serverPort, nickname, defaultChannel, channelPassword, autoStart, serverProtocol, ts6ApiKey, serverPassword, duckingEnabled, duckingVolumePercent, duckingRecoveryMs, identity)
-    VALUES (@id, @name, @serverAddress, @serverPort, @nickname, @defaultChannel, @channelPassword, @autoStart, @serverProtocol, @ts6ApiKey, @serverPassword, @duckingEnabled, @duckingVolumePercent, @duckingRecoveryMs, @identity)
+    INSERT INTO bot_instances (id, name, serverAddress, serverPort, nickname, defaultChannel, channelPassword, autoStart, serverProtocol, ts6ApiKey, serverPassword, duckingEnabled, duckingVolumePercent, duckingRecoveryMs, duckingThresholdDb, identity)
+    VALUES (@id, @name, @serverAddress, @serverPort, @nickname, @defaultChannel, @channelPassword, @autoStart, @serverProtocol, @ts6ApiKey, @serverPassword, @duckingEnabled, @duckingVolumePercent, @duckingRecoveryMs, @duckingThresholdDb, @identity)
     ON CONFLICT(id) DO UPDATE SET
       name = excluded.name,
       serverAddress = excluded.serverAddress,
@@ -175,6 +180,7 @@ export function createDatabase(dbPath: string): BotDatabase {
       duckingEnabled = excluded.duckingEnabled,
       duckingVolumePercent = excluded.duckingVolumePercent,
       duckingRecoveryMs = excluded.duckingRecoveryMs,
+      duckingThresholdDb = excluded.duckingThresholdDb,
       identity = excluded.identity
   `);
 
@@ -216,6 +222,7 @@ export function createDatabase(dbPath: string): BotDatabase {
         ...instance,
         autoStart: instance.autoStart ? 1 : 0,
         duckingEnabled: instance.duckingEnabled ? 1 : 0,
+        duckingThresholdDb: instance.duckingThresholdDb,
         identity: instance.identity ?? null,
       });
     },
@@ -238,6 +245,7 @@ export function createDatabase(dbPath: string): BotDatabase {
         duckingEnabled: r.duckingEnabled === 1,
         duckingVolumePercent: Number(r.duckingVolumePercent ?? defaultDucking.volumePercent),
         duckingRecoveryMs: Number(r.duckingRecoveryMs ?? defaultDucking.recoveryMs),
+        duckingThresholdDb: Number(r.duckingThresholdDb ?? defaultDucking.thresholdDb),
         identity: typeof r.identity === "string" ? r.identity : undefined,
       }));
     },

@@ -52,7 +52,7 @@ describe("AudioPlayer ducking", () => {
 
   it("respects configured ducking percentage", () => {
     const player = new AudioPlayer(logger);
-    player.setDuckingConfig({ enabled: true, volumePercent: 20, recoveryMs: 300 });
+    player.setDuckingConfig({ enabled: true, volumePercent: 20, recoveryMs: 300, thresholdDb: -42 });
     const pcm = Buffer.alloc(3840);
     for (let i = 0; i < pcm.length; i += 2) {
       pcm.writeInt16LE(20000, i);

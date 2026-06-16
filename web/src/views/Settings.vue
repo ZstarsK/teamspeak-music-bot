@@ -122,6 +122,20 @@
               </div>
             </div>
           </div>
+          <div class="form-group">
+            <label>触发阈值</label>
+            <div class="inline-input-wrap">
+              <input
+                v-model.number="editForm.duckingThresholdDb"
+                type="number"
+                min="-80"
+                max="0"
+                class="input"
+              />
+              <span>dB</span>
+            </div>
+            <div class="setting-help">数值越接近 0 越不敏感，例如 -30 需要更大声才会降低音乐音量</div>
+          </div>
           <div class="modal-actions">
             <button class="btn-secondary" @click="editingBot = null">取消</button>
             <button class="btn-primary" @click="saveEditBot">保存（连接设置需重启，Ducking 立即生效）</button>
@@ -639,6 +653,7 @@ const editForm = reactive({
   duckingEnabled: true,
   duckingVolumePercent: 35,
   duckingRecoveryMs: 420,
+  duckingThresholdDb: -42,
 });
 
 const neteaseCookie = ref('');
@@ -962,6 +977,7 @@ async function openEditBot(bot: any) {
     editForm.duckingEnabled = res.data.duckingEnabled ?? true;
     editForm.duckingVolumePercent = res.data.duckingVolumePercent ?? 35;
     editForm.duckingRecoveryMs = res.data.duckingRecoveryMs ?? 420;
+    editForm.duckingThresholdDb = res.data.duckingThresholdDb ?? -42;
   } catch {
     // Config not found — use defaults
     editForm.serverAddress = '';
@@ -973,6 +989,7 @@ async function openEditBot(bot: any) {
     editForm.duckingEnabled = true;
     editForm.duckingVolumePercent = 35;
     editForm.duckingRecoveryMs = 420;
+    editForm.duckingThresholdDb = -42;
   }
 }
 

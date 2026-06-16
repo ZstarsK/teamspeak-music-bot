@@ -3,6 +3,8 @@ import type { BotManager } from "../../bot/manager.js";
 import {
   DUCKING_RECOVERY_MS_MAX,
   DUCKING_RECOVERY_MS_MIN,
+  DUCKING_THRESHOLD_DB_MAX,
+  DUCKING_THRESHOLD_DB_MIN,
   DUCKING_VOLUME_PERCENT_MAX,
   DUCKING_VOLUME_PERCENT_MIN,
   getConfiguredMaxVolume,
@@ -136,6 +138,7 @@ export function createBotRouter(
         duckingEnabled,
         duckingVolumePercent,
         duckingRecoveryMs,
+        duckingThresholdDb,
       } = req.body;
 
       if ("duckingEnabled" in req.body && typeof duckingEnabled !== "boolean") {
@@ -170,6 +173,20 @@ export function createBotRouter(
         });
         return;
       }
+      if (
+        "duckingThresholdDb" in req.body &&
+        (
+          typeof duckingThresholdDb !== "number" ||
+          !Number.isFinite(duckingThresholdDb) ||
+          duckingThresholdDb < DUCKING_THRESHOLD_DB_MIN ||
+          duckingThresholdDb > DUCKING_THRESHOLD_DB_MAX
+        )
+      ) {
+        res.status(400).json({
+          error: `duckingThresholdDb must be between ${DUCKING_THRESHOLD_DB_MIN} and ${DUCKING_THRESHOLD_DB_MAX}`,
+        });
+        return;
+      }
 
       // Update in database
       botManager.updateBot(req.params.id, {
@@ -186,6 +203,9 @@ export function createBotRouter(
           : {}),
         ...(typeof duckingRecoveryMs === "number"
           ? { duckingRecoveryMs: Math.round(duckingRecoveryMs) }
+          : {}),
+        ...(typeof duckingThresholdDb === "number"
+          ? { duckingThresholdDb: Math.round(duckingThresholdDb) }
           : {}),
       });
       res.json({ success: true });

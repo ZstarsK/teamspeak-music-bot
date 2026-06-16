@@ -66,6 +66,7 @@ describe("database", () => {
       duckingEnabled: true,
       duckingVolumePercent: 35,
       duckingRecoveryMs: 420,
+      duckingThresholdDb: -42,
     };
 
     botDb.saveBotInstance(instance);
@@ -98,6 +99,7 @@ describe("database", () => {
       duckingEnabled: true,
       duckingVolumePercent: 35,
       duckingRecoveryMs: 420,
+      duckingThresholdDb: -42,
     });
 
     expect(botDb.deleteBotInstance("bot1")).toBe(true);

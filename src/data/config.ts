@@ -5,6 +5,7 @@ export interface DuckingSettings {
   enabled: boolean;
   volumePercent: number;
   recoveryMs: number;
+  thresholdDb: number;
 }
 
 export const SPOTIFY_LIBRESPOT_AUTH_MODES = ["access-token", "credentials-cache"] as const;
@@ -17,12 +18,15 @@ export const DUCKING_VOLUME_PERCENT_MIN = 0;
 export const DUCKING_VOLUME_PERCENT_MAX = 100;
 export const DUCKING_RECOVERY_MS_MIN = 0;
 export const DUCKING_RECOVERY_MS_MAX = 10_000;
+export const DUCKING_THRESHOLD_DB_MIN = -80;
+export const DUCKING_THRESHOLD_DB_MAX = 0;
 
 export function getDefaultDuckingSettings(): DuckingSettings {
   return {
     enabled: true,
     volumePercent: 35,
     recoveryMs: 420,
+    thresholdDb: -42,
   };
 }
 

@@ -67,6 +67,7 @@ export interface CreateBotParams {
   duckingEnabled?: boolean;
   duckingVolumePercent?: number;
   duckingRecoveryMs?: number;
+  duckingThresholdDb?: number;
 }
 
 export class BotManager extends EventEmitter {
@@ -110,6 +111,7 @@ export class BotManager extends EventEmitter {
       enabled: params.duckingEnabled ?? defaultDucking.enabled,
       volumePercent: params.duckingVolumePercent ?? defaultDucking.volumePercent,
       recoveryMs: params.duckingRecoveryMs ?? defaultDucking.recoveryMs,
+      thresholdDb: params.duckingThresholdDb ?? defaultDucking.thresholdDb,
     };
 
     const bot = new BotInstance({
@@ -156,6 +158,7 @@ export class BotManager extends EventEmitter {
       duckingEnabled: duckingSettings.enabled,
       duckingVolumePercent: duckingSettings.volumePercent,
       duckingRecoveryMs: duckingSettings.recoveryMs,
+      duckingThresholdDb: duckingSettings.thresholdDb,
     });
 
     this.logger.info({ botId: id, name: params.name }, "Bot instance created");
@@ -192,6 +195,7 @@ export class BotManager extends EventEmitter {
       duckingEnabled: params.duckingEnabled ?? existing.duckingEnabled,
       duckingVolumePercent: params.duckingVolumePercent ?? existing.duckingVolumePercent,
       duckingRecoveryMs: params.duckingRecoveryMs ?? existing.duckingRecoveryMs,
+      duckingThresholdDb: params.duckingThresholdDb ?? existing.duckingThresholdDb,
     });
     // Update in-memory name immediately (other fields need reconnect)
     const bot = this.bots.get(id);
@@ -203,7 +207,8 @@ export class BotManager extends EventEmitter {
       (
         params.duckingEnabled !== undefined ||
         params.duckingVolumePercent !== undefined ||
-        params.duckingRecoveryMs !== undefined
+        params.duckingRecoveryMs !== undefined ||
+        params.duckingThresholdDb !== undefined
       )
     ) {
       bot.updateDuckingSettings(
@@ -211,6 +216,7 @@ export class BotManager extends EventEmitter {
           ...(params.duckingEnabled !== undefined ? { enabled: params.duckingEnabled } : {}),
           ...(params.duckingVolumePercent !== undefined ? { volumePercent: params.duckingVolumePercent } : {}),
           ...(params.duckingRecoveryMs !== undefined ? { recoveryMs: params.duckingRecoveryMs } : {}),
+          ...(params.duckingThresholdDb !== undefined ? { thresholdDb: params.duckingThresholdDb } : {}),
         },
         false,
       );
@@ -281,6 +287,7 @@ export class BotManager extends EventEmitter {
           enabled: saved.duckingEnabled,
           volumePercent: saved.duckingVolumePercent,
           recoveryMs: saved.duckingRecoveryMs,
+          thresholdDb: saved.duckingThresholdDb,
         },
       });
       this.bots.set(id, bot);
@@ -338,6 +345,7 @@ export class BotManager extends EventEmitter {
           enabled: saved.duckingEnabled,
           volumePercent: saved.duckingVolumePercent,
           recoveryMs: saved.duckingRecoveryMs,
+          thresholdDb: saved.duckingThresholdDb,
         },
       });
 

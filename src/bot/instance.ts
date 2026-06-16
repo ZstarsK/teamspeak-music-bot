@@ -18,8 +18,14 @@ import {
 import type { Logger } from "../logger.js";
 import type { BotDatabase, ProfileConfig } from "../data/database.js";
 import {
+  DuckingDetector,
+  clampThresholdDb,
+} from "../audio/ducking-detector.js";
+import {
   DUCKING_RECOVERY_MS_MAX,
   DUCKING_RECOVERY_MS_MIN,
+  DUCKING_THRESHOLD_DB_MAX,
+  DUCKING_THRESHOLD_DB_MIN,
   DUCKING_VOLUME_PERCENT_MAX,
   DUCKING_VOLUME_PERCENT_MIN,
   getConfiguredMaxVolume,
@@ -130,6 +136,7 @@ export class BotInstance extends EventEmitter {
   private lastVoicePacketAt = 0;
   private forcedAdvanceToken: string | null = null;
   private duckingSettings: DuckingSettings;
+  private duckingDetector: DuckingDetector;
   private profileUpdateToken = 0;
 
   constructor(options: BotInstanceOptions) {
@@ -145,8 +152,10 @@ export class BotInstance extends EventEmitter {
     this.config = options.config;
     this.logger = options.logger.child({ botId: this.id });
     this.duckingSettings = { ...(options.duckingSettings ?? getDefaultDuckingSettings()) };
+    this.duckingSettings.thresholdDb = clampThresholdDb(this.duckingSettings.thresholdDb);
 
     this.tsClient = new TS3Client(options.tsOptions, this.logger);
+    this.duckingDetector = new DuckingDetector({ logger: this.logger });
     this.player = new AudioPlayer(this.logger, {
       maxVolume: getConfiguredMaxVolume(this.config),
     });
@@ -209,6 +218,7 @@ export class BotInstance extends EventEmitter {
       this.connected = false;
       this.stopDuckingMonitor();
       this.lastVoicePacketAt = 0;
+      this.duckingDetector.reset();
       this.player.setDuckingActive(false);
       this.player.stop();
       this.spotifyPlayback?.shutdown();
@@ -223,11 +233,12 @@ export class BotInstance extends EventEmitter {
       this._startIdlePoller();
       this.startDuckingMonitor();
       this.lastVoicePacketAt = 0;
+      this.duckingDetector.reset();
       this.player.setDuckingActive(false);
     });
 
-    this.tsClient.on("voiceData", (_packet: TS3VoiceData) => {
-      this.lastVoicePacketAt = Date.now();
+    this.tsClient.on("voiceData", (packet: TS3VoiceData) => {
+      this.handleDuckingVoicePacket(packet);
     });
   }
 
@@ -250,6 +261,7 @@ export class BotInstance extends EventEmitter {
     this._cancelIdleTimer();
     this.stopDuckingMonitor();
     this.lastVoicePacketAt = 0;
+    this.duckingDetector.reset();
     this.player.setDuckingActive(false);
     this.player.stop();
     this.spotifyPlayback?.shutdown();
@@ -308,12 +320,21 @@ export class BotInstance extends EventEmitter {
     this.duckingTimer = setInterval(() => {
       if (!this.connected) return;
       this.syncDuckingConfig();
+      const releaseMs = Math.max(DUCKING_RELEASE_MS, this.duckingSettings.recoveryMs);
       const active =
         this.duckingSettings.enabled &&
-        Date.now() - this.lastVoicePacketAt < DUCKING_RELEASE_MS;
+        Date.now() - this.lastVoicePacketAt < releaseMs;
       this.player.setDuckingActive(active);
       this.checkPlaybackStall();
     }, DUCKING_POLL_INTERVAL_MS);
+  }
+
+  private handleDuckingVoicePacket(packet: TS3VoiceData): void {
+    if (!this.duckingSettings.enabled) return;
+    if (this.player.getState() !== "playing") return;
+    if (packet.clientId === this.tsClient.getClientId()) return;
+    if (!this.duckingDetector.shouldTrigger(packet, this.duckingSettings)) return;
+    this.lastVoicePacketAt = Date.now();
   }
 
   private stopDuckingMonitor(): void {
@@ -335,6 +356,7 @@ export class BotInstance extends EventEmitter {
       ...this.duckingSettings,
       ...partial,
     };
+    this.duckingSettings.thresholdDb = clampThresholdDb(this.duckingSettings.thresholdDb);
     this.syncDuckingConfig();
     if (persist) {
       const saved = this.database.getBotInstances().find((instance) => instance.id === this.id);
@@ -344,6 +366,7 @@ export class BotInstance extends EventEmitter {
           duckingEnabled: this.duckingSettings.enabled,
           duckingVolumePercent: this.duckingSettings.volumePercent,
           duckingRecoveryMs: this.duckingSettings.recoveryMs,
+          duckingThresholdDb: this.duckingSettings.thresholdDb,
         });
       }
     }
@@ -776,7 +799,7 @@ export class BotInstance extends EventEmitter {
   }
 
   private formatDuckingSettings(settings: DuckingSettings = this.duckingSettings): string {
-    return `Ducking: ${settings.enabled ? "on" : "off"}, level ${settings.volumePercent}%, recovery ${settings.recoveryMs}ms`;
+    return `Ducking: ${settings.enabled ? "on" : "off"}, level ${settings.volumePercent}%, recovery ${settings.recoveryMs}ms, threshold ${settings.thresholdDb}dB`;
   }
 
   private cmdDuck(cmd: ParsedCommand): string {
@@ -810,6 +833,16 @@ export class BotInstance extends EventEmitter {
         return `Usage: !duck release <${DUCKING_RECOVERY_MS_MIN}-${DUCKING_RECOVERY_MS_MAX}>`;
       }
       this.updateDuckingSettings({ recoveryMs: value });
+    } else if (action === "threshold" || action === "threshold-db") {
+      const value = Number.parseInt(valueRaw ?? "", 10);
+      if (
+        !Number.isFinite(value) ||
+        value < DUCKING_THRESHOLD_DB_MIN ||
+        value > DUCKING_THRESHOLD_DB_MAX
+      ) {
+        return `Usage: !duck threshold <${DUCKING_THRESHOLD_DB_MIN}-${DUCKING_THRESHOLD_DB_MAX}>`;
+      }
+      this.updateDuckingSettings({ thresholdDb: value });
     } else if (action === "status") {
       return this.formatDuckingSettings();
     } else {
@@ -819,6 +852,7 @@ export class BotInstance extends EventEmitter {
         "!duck <on|off>",
         `!duck percent <${DUCKING_VOLUME_PERCENT_MIN}-${DUCKING_VOLUME_PERCENT_MAX}>`,
         `!duck release <${DUCKING_RECOVERY_MS_MIN}-${DUCKING_RECOVERY_MS_MAX}>`,
+        `!duck threshold <${DUCKING_THRESHOLD_DB_MIN}-${DUCKING_THRESHOLD_DB_MAX}>`,
       ].join("\n");
     }
 
